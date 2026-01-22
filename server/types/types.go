@@ -33,6 +33,8 @@ type CompletionRequest struct {
 	FilePath string
 	Lines    []string
 	Version  int
+	// PreviousLines is the file content before the most recent edit
+	PreviousLines []string
 	// Multi-file diff histories in the same workspace
 	FileDiffHistories []*FileDiffHistory
 	// Cursor position
@@ -66,8 +68,23 @@ type LinterError struct {
 // FileDiffHistory represents cumulative diffs for a specific file in the workspace
 type FileDiffHistory struct {
 	FileName    string
-	DiffHistory []string
+	DiffHistory []*DiffEntry
 }
+
+// DiffEntry represents a single diff operation with structured before/after content
+// This allows providers to format the diff in their required format
+type DiffEntry struct {
+	// Original is the content before the change (the text that was replaced/deleted)
+	Original string
+	// Updated is the content after the change (the new text)
+	Updated string
+}
+
+// GetOriginal returns the original content (implements utils.DiffEntry interface)
+func (d *DiffEntry) GetOriginal() string { return d.Original }
+
+// GetUpdated returns the updated content (implements utils.DiffEntry interface)
+func (d *DiffEntry) GetUpdated() string { return d.Updated }
 
 // CursorRange represents a range in the file (follows LSP conventions)
 type CursorRange struct {

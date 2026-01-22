@@ -563,73 +563,6 @@ func TestNoChanges(t *testing.T) {
 	assertDiffResultEqual(t, expected, actual)
 }
 
-func TestGenerateCursorDiffFormat(t *testing.T) {
-	tests := []struct {
-		name     string
-		oldText  string
-		newText  string
-		expected string
-	}{
-		{
-			name:     "Simple line addition",
-			oldText:  "line 1\nline 3",
-			newText:  "line 1\nline 2\nline 3",
-			expected: "2+|line 2\n",
-		},
-		{
-			name:     "Simple line deletion",
-			oldText:  "line 1\nline 2\nline 3",
-			newText:  "line 1\nline 3",
-			expected: "2-|line 2\n",
-		},
-		{
-			name:     "Multiple changes - deletions first",
-			oldText:  "line 1\nline 2\nline 3\nline 4",
-			newText:  "line 1\nline 5\nline 3\nline 6",
-			expected: "2-|line 2\n2+|line 5\n4-|line 4\n4+|line 6\n",
-		},
-		{
-			name:     "Character-level changes",
-			oldText:  "Hello world",
-			newText:  "Hello there",
-			expected: "1-|Hello world\n1+|Hello there\n",
-		},
-		{
-			name:     "Mixed line and character changes",
-			oldText:  "function test() {\n    return true;\n}",
-			newText:  "function test() {\n    return false;\n    console.log('added');\n}",
-			expected: "2-|    return true;\n2+|    return false;\n3+|    console.log('added');\n",
-		},
-		{
-			name:     "Empty old text",
-			oldText:  "",
-			newText:  "line 1\nline 2",
-			expected: "1+|line 1\n2+|line 2\n",
-		},
-		{
-			name:     "Empty new text",
-			oldText:  "line 1\nline 2",
-			newText:  "",
-			expected: "1-|line 1\n2-|line 2\n",
-		},
-		{
-			name:     "No changes",
-			oldText:  "line 1\nline 2",
-			newText:  "line 1\nline 2",
-			expected: "",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			actual := generateCursorDiffFormat(test.oldText, test.newText)
-			if actual != test.expected {
-				t.Errorf("Expected:\n%q\nGot:\n%q", test.expected, actual)
-			}
-		})
-	}
-}
-
 func TestConsecutiveModificationGrouping(t *testing.T) {
 	text1 := `function test() {
     start middle end
@@ -1171,10 +1104,6 @@ test()
 		}
 	}
 
-	// Let's also test the cursor diff format which might be what the UI uses
-	cursorDiff := generateCursorDiffFormat(oldText, newText)
-	t.Logf("Cursor diff format:\n%s", cursorDiff)
-
 	// The bug might be in the grouping logic or how empty lines are handled
 	// Check if all lines are properly detected
 	_ = []string{
@@ -1214,8 +1143,4 @@ test()
 		t.Errorf("Bug confirmed: Only detected %d changes but expected at least 2", len(actual.Changes))
 	}
 
-	// Verify that empty lines are included in the diff result
-	if !strings.Contains(cursorDiff, "3+|") || !strings.Contains(cursorDiff, "5+|") {
-		t.Errorf("Empty lines not included in diff result")
-	}
 }

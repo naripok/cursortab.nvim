@@ -241,6 +241,7 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) string {
 }
 
 // addRecentDiffs adds the recent diffs in Sweep's original/updated format
+// Uses the structured DiffEntry which contains actual before/after content
 func (p *Provider) addRecentDiffs(builder *strings.Builder, req *types.CompletionRequest) {
 	if len(req.FileDiffHistories) == 0 {
 		return
@@ -251,10 +252,9 @@ func (p *Provider) addRecentDiffs(builder *strings.Builder, req *types.Completio
 			continue
 		}
 
-		// Convert unified diffs to original/updated format
-		for _, diff := range fileHistory.DiffHistory {
-			original, updated := p.parseUnifiedDiff(diff)
-			if original == "" && updated == "" {
+		// Each DiffEntry contains the actual original and updated content
+		for _, diffEntry := range fileHistory.DiffHistory {
+			if diffEntry.Original == "" && diffEntry.Updated == "" {
 				continue
 			}
 
@@ -262,71 +262,32 @@ func (p *Provider) addRecentDiffs(builder *strings.Builder, req *types.Completio
 			builder.WriteString(fileHistory.FileName)
 			builder.WriteString(".diff\n")
 			builder.WriteString("original:\n")
-			builder.WriteString(original)
+			builder.WriteString(diffEntry.Original)
 			builder.WriteString("\nupdated:\n")
-			builder.WriteString(updated)
+			builder.WriteString(diffEntry.Updated)
 			builder.WriteString("\n")
 		}
 	}
 }
 
-// parseUnifiedDiff converts a unified diff to original and updated text
-func (p *Provider) parseUnifiedDiff(diff string) (original, updated string) {
-	lines := strings.Split(diff, "\n")
-	var originalLines, updatedLines []string
-
-	for _, line := range lines {
-		// Skip diff headers
-		if strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
-			continue
-		}
-
-		// Handle empty lines - they represent unchanged empty lines in the diff
-		if len(line) == 0 {
-			originalLines = append(originalLines, "")
-			updatedLines = append(updatedLines, "")
-			continue
-		}
-
-		if strings.HasPrefix(line, "-") {
-			// Removed line - part of original only
-			originalLines = append(originalLines, line[1:])
-		} else if strings.HasPrefix(line, "+") {
-			// Added line - part of updated only
-			updatedLines = append(updatedLines, line[1:])
-		} else if strings.HasPrefix(line, " ") {
-			// Context line - part of both
-			originalLines = append(originalLines, line[1:])
-			updatedLines = append(updatedLines, line[1:])
-		} else {
-			// Line without prefix - treat as context (shouldn't happen in valid diff)
-			originalLines = append(originalLines, line)
-			updatedLines = append(updatedLines, line)
-		}
-	}
-
-	return strings.Join(originalLines, "\n"), strings.Join(updatedLines, "\n")
-}
-
-// getOriginalWindowContent attempts to reconstruct the original content
-// before the most recent change. If no diff history is available for the
-// current file, we use the current content as the original.
+// getOriginalWindowContent returns the content to use for the "original/" section.
+// This is the file state before the most recent change, as expected by the sweep model.
 func (p *Provider) getOriginalWindowContent(req *types.CompletionRequest, windowStart, windowEnd int) string {
-	// Look for diff history for the current file
-	for _, fileHistory := range req.FileDiffHistories {
-		if fileHistory.FileName == req.FilePath && len(fileHistory.DiffHistory) > 0 {
-			// We have recent changes - extract the "original" portion from the most recent diff
-			// to show what the code looked like before the last edit
-			lastDiff := fileHistory.DiffHistory[len(fileHistory.DiffHistory)-1]
-			original, _ := p.parseUnifiedDiff(lastDiff)
-			if original != "" {
-				return original
-			}
-		}
+	// Use PreviousLines if available, otherwise fall back to current Lines
+	sourceLines := req.PreviousLines
+	if len(sourceLines) == 0 {
+		sourceLines = req.Lines
 	}
 
-	// Use the current window content as the original (no recent changes)
-	windowLines := req.Lines[windowStart:windowEnd]
+	// Clamp window bounds to available lines
+	if windowStart >= len(sourceLines) {
+		return ""
+	}
+	if windowEnd > len(sourceLines) {
+		windowEnd = len(sourceLines)
+	}
+
+	windowLines := sourceLines[windowStart:windowEnd]
 	return strings.Join(windowLines, "\n")
 }
 

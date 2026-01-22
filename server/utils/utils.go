@@ -92,40 +92,36 @@ func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int
 	return trimmedLines, newCursorRow, cursorCol, trimOffset
 }
 
-// TrimDiffHistory trims diff history content to fit within maxTokens per file
-func TrimDiffHistory(diffHistory []string, maxTokens int) []string {
-	if maxTokens <= 0 || len(diffHistory) == 0 {
-		return diffHistory
+// DiffEntry interface for token limiting - matches types.DiffEntry
+type DiffEntry interface {
+	GetOriginal() string
+	GetUpdated() string
+}
+
+// TrimDiffEntries trims diff entries to fit within maxTokens.
+// Keeps the most recent entries and removes older ones if over limit.
+func TrimDiffEntries[T DiffEntry](diffs []T, maxTokens int) []T {
+	if len(diffs) == 0 || maxTokens <= 0 {
+		return diffs
 	}
 
 	maxChars := EstimateCharsFromTokens(maxTokens)
 
-	// Calculate total content size
+	// Iterate from newest (end) to oldest (start), keeping entries within limit
 	totalChars := 0
-	for _, diff := range diffHistory {
-		totalChars += len(diff) + 1 // +1 for newline
-	}
+	cutoffIndex := 0
 
-	// If content is already within limits, return as-is
-	if totalChars <= maxChars {
-		return diffHistory
-	}
-
-	// Keep the most recent diffs (from the end) to stay within token limit
-	var trimmedDiffs []string
-	currentChars := 0
-
-	// Start from the end and work backwards
-	for i := len(diffHistory) - 1; i >= 0; i-- {
-		diffChars := len(diffHistory[i]) + 1
-		if currentChars+diffChars <= maxChars {
-			// Prepend to maintain chronological order
-			trimmedDiffs = append([]string{diffHistory[i]}, trimmedDiffs...)
-			currentChars += diffChars
-		} else {
+	for i := len(diffs) - 1; i >= 0; i-- {
+		entryChars := len(diffs[i].GetOriginal()) + len(diffs[i].GetUpdated())
+		if totalChars+entryChars > maxChars && i < len(diffs)-1 {
+			cutoffIndex = i + 1
 			break
 		}
+		totalChars += entryChars
 	}
 
-	return trimmedDiffs
+	if cutoffIndex > 0 {
+		return diffs[cutoffIndex:]
+	}
+	return diffs
 }

@@ -191,13 +191,13 @@ func (p *Provider) formatDiagnosticsForPrompt(req *types.CompletionRequest) stri
 	for _, err := range req.LinterErrors.Errors {
 		// Format: line X: [severity] message (source)
 		if err.Range != nil {
-			diagBuilder.WriteString(fmt.Sprintf("line %d: ", err.Range.StartLine))
+			fmt.Fprintf(&diagBuilder, "line %d: ", err.Range.StartLine)
 		}
 
-		diagBuilder.WriteString(fmt.Sprintf("[%s] %s", err.Severity, err.Message))
+		fmt.Fprintf(&diagBuilder, "[%s] %s", err.Severity, err.Message)
 
 		if err.Source != "" {
-			diagBuilder.WriteString(fmt.Sprintf(" (source: %s)", err.Source))
+			fmt.Fprintf(&diagBuilder, " (source: %s)", err.Source)
 		}
 		diagBuilder.WriteString("\n")
 	}
@@ -228,7 +228,13 @@ func (p *Provider) buildUserEditsFromDiffHistory(req *types.CompletionRequest) s
 		}
 
 		// Each file's diffs are concatenated with double newlines
-		for _, diff := range fileHistory.DiffHistory {
+		for _, diffEntry := range fileHistory.DiffHistory {
+			// Convert structured diff to unified diff format
+			unifiedDiff := p.diffEntryToUnifiedDiff(diffEntry)
+			if unifiedDiff == "" {
+				continue
+			}
+
 			if !firstEdit {
 				editsBuilder.WriteString("\n\n")
 			}
@@ -239,12 +245,44 @@ func (p *Provider) buildUserEditsFromDiffHistory(req *types.CompletionRequest) s
 			editsBuilder.WriteString(fileHistory.FileName)
 			editsBuilder.WriteString("\":\n")
 			editsBuilder.WriteString("```diff\n")
-			editsBuilder.WriteString(diff)
+			editsBuilder.WriteString(unifiedDiff)
 			editsBuilder.WriteString("\n```")
 		}
 	}
 
 	return editsBuilder.String()
+}
+
+// diffEntryToUnifiedDiff converts a structured DiffEntry to unified diff format
+func (p *Provider) diffEntryToUnifiedDiff(entry *types.DiffEntry) string {
+	if entry.Original == entry.Updated {
+		return ""
+	}
+
+	originalLines := strings.Split(entry.Original, "\n")
+	updatedLines := strings.Split(entry.Updated, "\n")
+
+	var diffBuilder strings.Builder
+
+	// Write diff header
+	fmt.Fprintf(&diffBuilder, "@@ -%d,%d +%d,%d @@\n",
+		1, len(originalLines), 1, len(updatedLines))
+
+	// Write deleted lines (from original)
+	for _, line := range originalLines {
+		diffBuilder.WriteString("-")
+		diffBuilder.WriteString(line)
+		diffBuilder.WriteString("\n")
+	}
+
+	// Write added lines (from updated)
+	for _, line := range updatedLines {
+		diffBuilder.WriteString("+")
+		diffBuilder.WriteString(line)
+		diffBuilder.WriteString("\n")
+	}
+
+	return strings.TrimSuffix(diffBuilder.String(), "\n")
 }
 
 // buildInstructionPrompt wraps the user excerpt in the instruction template
@@ -468,16 +506,3 @@ func (p *Provider) parseSimpleCompletion(req *types.CompletionRequest, completio
 	}
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

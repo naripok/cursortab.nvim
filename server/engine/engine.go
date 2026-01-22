@@ -68,7 +68,7 @@ type Engine struct {
 	config EngineConfig
 
 	// Per-file cumulative diff histories within the current workspace
-	fileDiffStore map[string][]string
+	fileDiffStore map[string][]*types.DiffEntry
 }
 
 func NewEngine(provider types.Provider, config EngineConfig) (*Engine, error) {
@@ -106,7 +106,7 @@ func NewEngine(provider types.Provider, config EngineConfig) (*Engine, error) {
 		prefetchInProgress:      false,
 		waitingForPrefetchOnTab: false,
 		stopped:                 false,
-		fileDiffStore:           make(map[string][]string),
+		fileDiffStore:           make(map[string][]*types.DiffEntry),
 	}, nil
 }
 
@@ -330,6 +330,7 @@ func (e *Engine) requestCompletion(source types.CompletionSource) {
 			FilePath:          e.buffer.Path,
 			Lines:             e.buffer.Lines,
 			Version:           e.buffer.Version,
+			PreviousLines:     e.buffer.PreviousLines,
 			FileDiffHistories: e.getAllFileDiffHistories(),
 			CursorRow:         e.buffer.Row,
 			CursorCol:         e.buffer.Col,
@@ -373,6 +374,7 @@ func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int,
 
 	// Snapshot required values to avoid races with buffer mutation
 	lines := append([]string{}, e.buffer.Lines...)
+	previousLines := append([]string{}, e.buffer.PreviousLines...)
 	version := e.buffer.Version
 	// legacy per-file diff history removed in favor of multi-file store
 	filePath := e.buffer.Path
@@ -388,6 +390,7 @@ func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int,
 			FilePath:          filePath,
 			Lines:             lines,
 			Version:           version,
+			PreviousLines:     previousLines,
 			FileDiffHistories: e.getAllFileDiffHistories(),
 			CursorRow:         overrideRow,
 			CursorCol:         overrideCol,
@@ -436,7 +439,7 @@ func (e *Engine) acceptCompletion() {
 	// After commit, update per-file diff store for the current file
 	if e.buffer.Path != "" && len(e.buffer.DiffHistories) > 0 {
 		// Copy slice to avoid aliasing
-		diffs := make([]string, len(e.buffer.DiffHistories))
+		diffs := make([]*types.DiffEntry, len(e.buffer.DiffHistories))
 		copy(diffs, e.buffer.DiffHistories)
 		e.fileDiffStore[e.buffer.Path] = diffs
 
@@ -468,7 +471,7 @@ func (e *Engine) trimFileDiffStoreToMaxFiles(maxFiles int) {
 	// Convert to slice for sorting by some criteria (e.g., file name for deterministic behavior)
 	type fileEntry struct {
 		fileName string
-		diffs    []string
+		diffs    []*types.DiffEntry
 	}
 
 	var entries []fileEntry
@@ -493,7 +496,7 @@ func (e *Engine) trimFileDiffStoreToMaxFiles(maxFiles int) {
 	}
 
 	// Rebuild the map with only the kept entries
-	newFileDiffStore := make(map[string][]string)
+	newFileDiffStore := make(map[string][]*types.DiffEntry)
 	for _, entry := range entriesToKeep {
 		newFileDiffStore[entry.fileName] = entry.diffs
 	}
@@ -512,12 +515,16 @@ func (e *Engine) getAllFileDiffHistories() []*types.FileDiffHistory {
 			continue
 		}
 		// Copy to ensure immutability
-		copyDiffs := make([]string, len(diffs))
+		copyDiffs := make([]*types.DiffEntry, len(diffs))
 		copy(copyDiffs, diffs)
 
-		// Trim diff history content if MaxDiffTokens is configured
+		// Apply token limiting if configured
 		if e.config.MaxDiffTokens > 0 {
-			copyDiffs = utils.TrimDiffHistory(copyDiffs, e.config.MaxDiffTokens)
+			copyDiffs = utils.TrimDiffEntries(copyDiffs, e.config.MaxDiffTokens)
+		}
+
+		if len(copyDiffs) == 0 {
+			continue
 		}
 
 		histories = append(histories, &types.FileDiffHistory{
@@ -530,6 +537,7 @@ func (e *Engine) getAllFileDiffHistories() []*types.FileDiffHistory {
 	}
 	return histories
 }
+
 
 func (e *Engine) acceptCursorTarget() {
 	if e.n == nil || e.cursorTarget == nil {

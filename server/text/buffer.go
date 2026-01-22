@@ -22,7 +22,8 @@ type Buffer struct {
 	Col           int // 0-indexed
 	Path          string
 	Version       int
-	DiffHistories []string
+	DiffHistories []*types.DiffEntry // Structured diff history for provider consumption
+	PreviousLines []string           // Buffer content before the most recent edit (for sweep provider)
 
 	originalLines    []string // Original file content when editing session started
 	lastModifiedLine int      // Track which line was last modified
@@ -45,7 +46,8 @@ func NewBuffer(config BufferConfig) (*Buffer, error) {
 		Col:                     0,
 		Path:                    "",
 		Version:                 0,
-		DiffHistories:           []string{},
+		DiffHistories:           []*types.DiffEntry{},
+		PreviousLines:           []string{},
 		originalLines:           []string{},
 		lastModifiedLine:        -1,
 		id:                      nvim.Buffer(0),
@@ -136,7 +138,10 @@ func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
 		b.id = currentBuf
 		b.originalLines = make([]string, len(linesStr))
 		copy(b.originalLines, linesStr)
-		b.DiffHistories = []string{}
+		// Initialize PreviousLines to current content (no edits yet)
+		b.PreviousLines = make([]string, len(linesStr))
+		copy(b.PreviousLines, linesStr)
+		b.DiffHistories = []*types.DiffEntry{}
 		b.lastModifiedLine = -1
 		b.Version = 0
 	} else {
@@ -222,7 +227,7 @@ func (b *Buffer) OnCompletionReady(n *nvim.Nvim, startLine, endLineInclusive int
 }
 
 // CommitPendingEdit applies the pending edit to buffer state, increments version,
-// and appends a cumulative diff entry (from original baseline to current). No-op if no pending edit.
+// and appends a structured diff entry showing before/after content. No-op if no pending edit.
 func (b *Buffer) CommitPendingEdit() {
 	if !b.hasPending {
 		return
@@ -232,8 +237,28 @@ func (b *Buffer) CommitPendingEdit() {
 	endLineInclusive := b.pendingEndLineInclusive
 	lines := b.pendingLines
 
-	// Compute cumulative diff from original baseline to post-apply contents
-	oldText := strings.Join(b.originalLines, "\n")
+	// Extract the original content (what was in the range before the edit)
+	var originalLines []string
+	for i := startLine; i <= endLineInclusive && i-1 < len(b.Lines); i++ {
+		originalLines = append(originalLines, b.Lines[i-1])
+	}
+	originalContent := strings.Join(originalLines, "\n")
+	updatedContent := strings.Join(lines, "\n")
+
+	// Only record diff if there's an actual change
+	if originalContent != updatedContent {
+		diffEntry := &types.DiffEntry{
+			Original: originalContent,
+			Updated:  updatedContent,
+		}
+		b.DiffHistories = append(b.DiffHistories, diffEntry)
+	}
+
+	// Save current lines as previous state BEFORE updating (for sweep provider)
+	b.PreviousLines = make([]string, len(b.Lines))
+	copy(b.PreviousLines, b.Lines)
+
+	// Compute the new buffer contents
 	newLines := make([]string, 0, len(b.Lines)-((endLineInclusive-startLine)+1)+len(lines))
 	if startLine-1 > 0 && startLine-1 <= len(b.Lines) {
 		newLines = append(newLines, b.Lines[:startLine-1]...)
@@ -241,11 +266,6 @@ func (b *Buffer) CommitPendingEdit() {
 	newLines = append(newLines, lines...)
 	if endLineInclusive < len(b.Lines) {
 		newLines = append(newLines, b.Lines[endLineInclusive:]...)
-	}
-	newText := strings.Join(newLines, "\n")
-	diff := generateCursorDiffFormat(oldText, newText)
-	if diff != "" {
-		b.DiffHistories = append(b.DiffHistories, diff)
 	}
 
 	// Commit the new content and bump version
