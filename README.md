@@ -1,7 +1,7 @@
 # cursortab.nvim
 
-A Neovim plugin that provides intelligent cursor movement and tab completion.
-Supports multiple AI providers including autocomplete, Sweep, and Zeta models.
+A Neovim plugin that provides edit completions and cursor predictions. Currently
+supports custom models and models form Zeta (Zed) and SweepAI.
 
 <p align="center">
     <img src="assets/preview.png" width=512></img>
@@ -18,7 +18,7 @@ Supports multiple AI providers including autocomplete, Sweep, and Zeta models.
 ```lua
 {
   "leonardcser/cursortab.nvim",
-  build = "cd server && go build -o cursortab .",
+  build = "cd server && go build",
   config = function()
     require("cursortab").setup()
   end,
@@ -30,7 +30,7 @@ Supports multiple AI providers including autocomplete, Sweep, and Zeta models.
 ```lua
 use {
   "leonardcser/cursortab.nvim",
-  run = "cd server && go build -o cursortab .",
+  run = "cd server && go build",
   config = function()
     require("cursortab").setup()
   end
@@ -88,7 +88,7 @@ End-of-line completion using OpenAI-compatible API endpoints.
 
 **Requirements:**
 
-- A running autocomplete server (e.g., `serve.py`)
+- An OpenAI-compatible completions endpoint
 
 **Example Configuration:**
 
@@ -160,7 +160,7 @@ require("cursortab").setup({
 llama-server -hf sweepai/sweep-next-edit-1.5b-GGUF --port 8000
 
 # Or with a local GGUF file
-llama-server -m sweep-next-edit-1.5b.gguf --port 8000
+llama-server -m sweep-next-edit-1.5b.q8_0.v2.gguf --port 8000
 ```
 
 ## Usage
@@ -185,9 +185,29 @@ llama-server -m sweep-next-edit-1.5b.gguf --port 8000
 - Go 1.24.2+ (for building the server component)
 - Neovim 0.8+ (for the plugin)
 
+## Development
+
+### Build
+
+To build the server component:
+
+```bash
+cd server && go build
+```
+
+### Test
+
+To run tests:
+
+```bash
+cd server && go test ./...
+```
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or a pull request.
+
+Feel free to open issues for bugs :)
 
 ## License
 
