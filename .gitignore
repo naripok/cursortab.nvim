@@ -1,0 +1,5 @@
+server/cursortab.log
+server/cursortab.sock
+server/cursortab.pid
+server/cursortab
+.DS_Store

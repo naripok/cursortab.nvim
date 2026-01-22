@@ -1,0 +1,104 @@
+package types
+
+import "context"
+
+// Completion represents a code completion with line range and content
+type Completion struct {
+	StartLine  int // 1-indexed
+	EndLineInc int // 1-indexed, inclusive
+	Lines      []string
+}
+
+type CompletionSource int
+
+const (
+	CompletionSourceTyping CompletionSource = iota
+	CompletionSourceIdle
+)
+
+// CursorPredictionTarget represents the target for cursor jump with additional metadata
+type CursorPredictionTarget struct {
+	RelativePath    string
+	LineNumber      int32 // 1-indexed
+	ExpectedContent string
+	ShouldRetrigger bool
+}
+
+// CompletionRequest contains all the context needed for unified completion requests
+type CompletionRequest struct {
+	Source        CompletionSource
+	WorkspacePath string
+	WorkspaceID   string
+	// File context
+	FilePath string
+	Lines    []string
+	Version  int
+	// Multi-file diff histories in the same workspace
+	FileDiffHistories []*FileDiffHistory
+	// Cursor position
+	CursorRow int // 1-indexed
+	CursorCol int // 0-indexed
+	// Linter errors if LSP is active
+	LinterErrors *LinterErrors
+}
+
+// CompletionResponse contains both completions and cursor prediction target
+type CompletionResponse struct {
+	Completions  []*Completion
+	CursorTarget *CursorPredictionTarget // Optional, from cursor_prediction_target
+}
+
+// LinterErrors represents linter error information for the current file
+type LinterErrors struct {
+	RelativeWorkspacePath string
+	Errors                []*LinterError
+	FileContents          string
+}
+
+// LinterError represents a single linter error
+type LinterError struct {
+	Message  string
+	Source   string
+	Severity string
+	Range    *CursorRange
+}
+
+// FileDiffHistory represents cumulative diffs for a specific file in the workspace
+type FileDiffHistory struct {
+	FileName    string
+	DiffHistory []string
+}
+
+// CursorRange represents a range in the file (follows LSP conventions)
+type CursorRange struct {
+	StartLine      int // 1-indexed
+	StartCharacter int // 0-indexed
+	EndLine        int // 1-indexed
+	EndCharacter   int // 0-indexed
+}
+
+// Provider defines the interface that all AI providers must implement
+type Provider interface {
+	// GetCompletion returns code completions and optional cursor prediction target in a single response
+	GetCompletion(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error)
+}
+
+// ProviderType represents the type of provider
+type ProviderType string
+
+const (
+	ProviderTypeAutoComplete ProviderType = "autocomplete"
+	ProviderTypeSweep        ProviderType = "sweep"
+	ProviderTypeZeta         ProviderType = "zeta"
+)
+
+// ProviderConfig holds configuration for providers
+type ProviderConfig struct {
+	MaxTokens int // Maximum tokens to send in a request (0 = no limit)
+	// Generic provider configuration (used by Zeta, autocomplete, etc.)
+	ProviderURL         string  // URL of the provider server (e.g., "http://localhost:8000")
+	ProviderModel       string  // Model name
+	ProviderTemperature float64 // Sampling temperature
+	ProviderMaxTokens   int     // Max tokens to generate
+	ProviderTopK        int     // Top-k sampling (used by some providers)
+}
