@@ -2,10 +2,20 @@ package text
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
+
+// splitLines splits text by newline and removes trailing empty element if present
+func splitLines(text string) []string {
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
 
 // DiffType represents the type of diff operation
 type DiffType int
@@ -192,10 +202,8 @@ func calculateCursorPosition(result *DiffResult, newText string) {
 	// Set cursor position
 	if targetLine > 0 && targetLine <= len(newLines) {
 		result.CursorLine = targetLine
-		// Position at end of the target line
-		if targetLine-1 < len(newLines) {
-			result.CursorCol = len(newLines[targetLine-1])
-		}
+		// Position at end of the target line (targetLine-1 is always valid given the check above)
+		result.CursorCol = len(newLines[targetLine-1])
 	}
 }
 
@@ -208,15 +216,7 @@ func applyGrouping(result *DiffResult, oldText string) {
 	for lineNum := range result.Changes {
 		lineNumbers = append(lineNumbers, lineNum)
 	}
-
-	// Sort line numbers
-	for i := 0; i < len(lineNumbers); i++ {
-		for j := i + 1; j < len(lineNumbers); j++ {
-			if lineNumbers[i] > lineNumbers[j] {
-				lineNumbers[i], lineNumbers[j] = lineNumbers[j], lineNumbers[i]
-			}
-		}
-	}
+	sort.Ints(lineNumbers)
 
 	if len(lineNumbers) == 0 {
 		return
@@ -329,11 +329,7 @@ func processLineDiffs(lineDiffs []diffmatchpatch.Diff, result *DiffResult) {
 
 	for i < len(lineDiffs) {
 		diff := lineDiffs[i]
-		lines := strings.Split(diff.Text, "\n")
-		// Remove empty last element if text ends with newline
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
+		lines := splitLines(diff.Text)
 
 		switch diff.Type {
 		case diffmatchpatch.DiffEqual:
@@ -346,11 +342,7 @@ func processLineDiffs(lineDiffs []diffmatchpatch.Diff, result *DiffResult) {
 			// Check if this is followed by an insert - potential modification
 			if i+1 < len(lineDiffs) && lineDiffs[i+1].Type == diffmatchpatch.DiffInsert {
 				// This is a delete followed by insert - treat as modification(s)
-				insertDiff := lineDiffs[i+1]
-				insertLines := strings.Split(insertDiff.Text, "\n")
-				if len(insertLines) > 0 && insertLines[len(insertLines)-1] == "" {
-					insertLines = insertLines[:len(insertLines)-1]
-				}
+				insertLines := splitLines(lineDiffs[i+1].Text)
 
 				// Handle the modification(s)
 				handleModifications(lines, insertLines, oldLineNum, newLineNum, result)
@@ -523,44 +515,55 @@ func handleModifications(deletedLines, insertedLines []string, oldLineStart, new
 		}
 
 		// Third pass: Handle unmatched deletions
-		// Deletions need to be mapped carefully to avoid conflicts with modifications/additions
-		// We'll map them relative to new text positions, accounting for matched lines
+		// Use OLD line numbers since deletions refer to content being removed from original text
 		for i, deletedLine := range deletedLines {
 			if usedDeletes[i] {
 				continue
 			}
 
-			// Find the next matched or inserted line after this deletion to determine positioning
-			// Start by computing the position as if it's in the new text
-			lineNum := newLineStart + i + 1
+			lineNum := oldLineStart + i + 1
 
-			// Check if this line number is already used by a modification or addition
-			// If so, find the next available line number
-			for {
-				if _, exists := result.Changes[lineNum]; !exists {
-					break
+			// Only add if this line number isn't already used by a modification
+			if _, exists := result.Changes[lineNum]; !exists {
+				result.Changes[lineNum] = LineDiff{
+					Type:       LineDeletion,
+					LineNumber: lineNum,
+					Content:    deletedLine,
 				}
-				lineNum++
 			}
-
-			result.Changes[lineNum] = LineDiff{
-				Type:       LineDeletion,
-				LineNumber: lineNum,
-				Content:    deletedLine,
-			}
+			// If line is already used by a modification, the deletion is implicitly handled
 		}
 
 		// Fourth pass: Handle unmatched additions
+		// Use NEW line numbers since additions refer to content in the new text
 		for i, insertedLine := range insertedLines {
 			if usedInserts[i] {
 				continue
 			}
 
 			lineNum := newLineStart + i + 1
-			result.Changes[lineNum] = LineDiff{
-				Type:       LineAddition,
-				LineNumber: lineNum,
-				Content:    insertedLine,
+
+			// Check if this line number already has a deletion - if so, convert to modification
+			if existing, exists := result.Changes[lineNum]; exists {
+				if existing.Type == LineDeletion {
+					// Convert deletion + addition at same line to a modification
+					diffType, colStart, colEnd := categorizeLineChangeWithColumns(existing.Content, insertedLine)
+					result.Changes[lineNum] = LineDiff{
+						Type:       diffType,
+						LineNumber: lineNum,
+						Content:    insertedLine,
+						OldContent: existing.Content,
+						ColStart:   colStart,
+						ColEnd:     colEnd,
+					}
+				}
+				// If it's not a deletion, skip (already handled by modification)
+			} else {
+				result.Changes[lineNum] = LineDiff{
+					Type:       LineAddition,
+					LineNumber: lineNum,
+					Content:    insertedLine,
+				}
 			}
 		}
 	}
@@ -572,150 +575,135 @@ func categorizeLineChangeWithColumns(oldLine, newLine string) (DiffType, int, in
 	diffs := dmp.DiffMain(oldLine, newLine, false)
 	diffs = dmp.DiffCleanupSemantic(diffs)
 
-	insertions := 0
-	deletions := 0
-	hasEqual := false
-
-	// Track column positions for character-level changes
-	colStart := -1
-	oldPos := 0
-	newPos := 0
+	// Count diff operations and extract texts
+	var insertions, deletions int
+	var hasEqual bool
+	var deletedText, insertedText string
 
 	for _, diff := range diffs {
 		switch diff.Type {
 		case diffmatchpatch.DiffInsert:
 			insertions++
-			if colStart == -1 {
-				colStart = newPos
-			}
-			newPos += len(diff.Text)
+			insertedText = diff.Text
 		case diffmatchpatch.DiffDelete:
 			deletions++
-			if colStart == -1 {
-				colStart = oldPos
-			}
-			oldPos += len(diff.Text)
+			deletedText = diff.Text
 		case diffmatchpatch.DiffEqual:
 			hasEqual = true
-			oldPos += len(diff.Text)
-			newPos += len(diff.Text)
 		}
 	}
 
-	// If only insertions and equal parts (no deletions)
+	// Handle pure insertions (no deletions)
 	if deletions == 0 && insertions > 0 && hasEqual {
-		// Check if it's an append at the end
-		if strings.HasPrefix(newLine, oldLine) {
-			return LineAppendChars, len(oldLine), len(newLine)
-		}
-		// If it's a single insertion with equal parts, treat as replacement
-		if insertions == 1 {
-			// Find the insertion position and treat as replacement
-			replaceStart := 0
-			replaceEnd := 0
-			pos := 0
-
-			for _, diff := range diffs {
-				if diff.Type == diffmatchpatch.DiffInsert {
-					replaceStart = pos
-					replaceEnd = pos + len(diff.Text)
-					break
-				} else if diff.Type == diffmatchpatch.DiffEqual {
-					pos += len(diff.Text)
-				}
-			}
-
-			return LineReplaceChars, replaceStart, replaceEnd
-		}
-		// Multiple insertions - treat as general modification
+		return categorizePureInsertion(oldLine, newLine, diffs, insertions)
 	}
 
-	// If only deletions and equal parts (no insertions)
+	// Handle pure deletions (no insertions)
 	if insertions == 0 && deletions > 0 && hasEqual {
-		// Calculate deletion range properly
-		deleteStart := 0
-		deleteEnd := 0
-		pos := 0
-
-		// Find where deletion starts and ends
-		for _, diff := range diffs {
-			if diff.Type == diffmatchpatch.DiffDelete {
-				deleteStart = pos
-				deleteEnd = pos + len(diff.Text)
-				break
-			} else if diff.Type == diffmatchpatch.DiffEqual {
-				pos += len(diff.Text)
-			}
-		}
-
-		return LineDeleteChars, deleteStart, deleteEnd
+		return categorizePureDeletion(diffs)
 	}
 
-	// If there's both insertions and deletions in a single sequence
+	// Handle single insertion + single deletion (potential simple replacement)
 	if insertions == 1 && deletions == 1 && hasEqual {
-		// Check if this is a simple replacement or a complex modification
-		// Simple replacements should be small, single-word changes
-		var deletedText, insertedText string
-
-		for _, diff := range diffs {
-			switch diff.Type {
-			case diffmatchpatch.DiffDelete:
-				deletedText = diff.Text
-			case diffmatchpatch.DiffInsert:
-				insertedText = diff.Text
-			}
-		}
-
-		// If either the deleted or inserted text contains multiple words or is very different in length,
-		// treat it as a complex modification
-		deletedWords := len(strings.Fields(deletedText))
-		insertedWords := len(strings.Fields(insertedText))
-
-		// Consider it a modification if:
-		// 1. Either has more than 2 words
-		// 2. The word count difference is more than 1
-		// 3. For multi-word changes, length difference is very large (more than 100% change)
-		lengthRatio := float64(len(insertedText)) / float64(len(deletedText))
-
-		// If either deleted or inserted text has multiple words, be more strict
-		if deletedWords > 2 || insertedWords > 2 ||
-			abs(deletedWords-insertedWords) > 1 {
-			return LineModification, 0, 0
-		}
-
-		// For single-word to single-word changes, be more lenient with length ratio
-		// Only consider it a modification if the length difference is extreme (>3x)
-		if deletedWords == 1 && insertedWords == 1 {
-			if lengthRatio > 3.0 || lengthRatio < 0.33 {
-				return LineModification, 0, 0
-			}
-		} else {
-			// For other cases, use stricter length ratio
-			if lengthRatio > 2.0 || lengthRatio < 0.5 {
-				return LineModification, 0, 0
-			}
-		}
-
-		// For simple replace operations, find the range of the new content (inserted text)
-		replaceStart := 0
-		replaceEnd := 0
-		pos := 0
-
-		for _, diff := range diffs {
-			if diff.Type == diffmatchpatch.DiffInsert {
-				replaceStart = pos
-				replaceEnd = pos + len(diff.Text)
-				break
-			} else if diff.Type == diffmatchpatch.DiffEqual {
-				pos += len(diff.Text)
-			}
-		}
-
-		return LineReplaceChars, replaceStart, replaceEnd
+		return categorizeSingleReplacement(diffs, deletedText, insertedText)
 	}
 
 	// Default to general modification
 	return LineModification, 0, 0
+}
+
+// categorizePureInsertion handles cases with only insertions (no deletions)
+func categorizePureInsertion(oldLine, newLine string, diffs []diffmatchpatch.Diff, insertions int) (DiffType, int, int) {
+	// Check if it's an append at the end
+	if strings.HasPrefix(newLine, oldLine) {
+		return LineAppendChars, len(oldLine), len(newLine)
+	}
+
+	// Single insertion - find position and treat as replacement
+	if insertions == 1 {
+		pos := 0
+		for _, diff := range diffs {
+			if diff.Type == diffmatchpatch.DiffInsert {
+				return LineReplaceChars, pos, pos + len(diff.Text)
+			}
+			if diff.Type == diffmatchpatch.DiffEqual {
+				pos += len(diff.Text)
+			}
+		}
+	}
+
+	// Multiple insertions - general modification
+	return LineModification, 0, 0
+}
+
+// categorizePureDeletion handles cases with only deletions (no insertions)
+func categorizePureDeletion(diffs []diffmatchpatch.Diff) (DiffType, int, int) {
+	pos := 0
+	for _, diff := range diffs {
+		if diff.Type == diffmatchpatch.DiffDelete {
+			return LineDeleteChars, pos, pos + len(diff.Text)
+		}
+		if diff.Type == diffmatchpatch.DiffEqual {
+			pos += len(diff.Text)
+		}
+	}
+	return LineModification, 0, 0
+}
+
+// categorizeSingleReplacement handles cases with exactly one deletion and one insertion
+func categorizeSingleReplacement(diffs []diffmatchpatch.Diff, deletedText, insertedText string) (DiffType, int, int) {
+	// Check if this is a complex modification based on word count heuristics
+	if isComplexModification(deletedText, insertedText) {
+		return LineModification, 0, 0
+	}
+
+	// Simple replacement - find the insertion position
+	pos := 0
+	for _, diff := range diffs {
+		if diff.Type == diffmatchpatch.DiffInsert {
+			return LineReplaceChars, pos, pos + len(diff.Text)
+		}
+		if diff.Type == diffmatchpatch.DiffEqual {
+			pos += len(diff.Text)
+		}
+	}
+
+	return LineModification, 0, 0
+}
+
+// isComplexModification determines if a deletion+insertion pair is too complex for simple replacement
+func isComplexModification(deletedText, insertedText string) bool {
+	deletedWords := len(strings.Fields(deletedText))
+	insertedWords := len(strings.Fields(insertedText))
+
+	// Too many words = complex modification
+	if deletedWords > 2 || insertedWords > 2 {
+		return true
+	}
+
+	// Large word count difference = complex modification
+	if abs(deletedWords-insertedWords) > 1 {
+		return true
+	}
+
+	// Check length ratio (avoid division by zero)
+	deletedLen := len(deletedText)
+	insertedLen := len(insertedText)
+
+	if deletedLen == 0 {
+		// Deletion is empty but insertion exists - treat as modification if insertion is substantial
+		return insertedLen > 10
+	}
+
+	lengthRatio := float64(insertedLen) / float64(deletedLen)
+
+	// For single-word changes, be lenient (allow up to 3x difference)
+	if deletedWords == 1 && insertedWords == 1 {
+		return lengthRatio > 3.0 || lengthRatio < 0.33
+	}
+
+	// For other cases, be stricter (allow up to 2x difference)
+	return lengthRatio > 2.0 || lengthRatio < 0.5
 }
 
 // abs returns the absolute value of an integer
@@ -740,15 +728,6 @@ func generateCursorDiffFormat(oldText, newText string) string {
 
 	var out []string
 	printIdx := 0 // zero-based position in the new text as we apply changes
-
-	// Helper to split a diff's text into lines without trailing empty
-	splitLines := func(text string) []string {
-		lines := strings.Split(text, "\n")
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
-			lines = lines[:len(lines)-1]
-		}
-		return lines
-	}
 
 	for i := range len(lineDiffs) {
 		df := lineDiffs[i]

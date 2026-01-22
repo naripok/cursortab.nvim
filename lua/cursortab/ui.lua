@@ -294,17 +294,28 @@ local function show_completion(diff_result)
 
 	local addition_offset = 0
 
-	-- Process each change
-	for line_str, change in pairs(diff_result.changes or {}) do
-		---@type integer|nil
-		local relative_line_num = tonumber(line_str)
+	-- Collect and sort line numbers to process changes in order
+	-- This is critical because addition_offset must be accumulated in ascending line order
+	local sorted_lines = {}
+	for line_str, _ in pairs(diff_result.changes or {}) do
+		local line_num = tonumber(line_str)
+		if line_num then
+			table.insert(sorted_lines, line_num)
+		end
+	end
+	table.sort(sorted_lines)
+
+	-- Process each change in sorted line order
+	for _, sorted_line_num in ipairs(sorted_lines) do
+		local line_str = tostring(sorted_line_num)
+		local change = diff_result.changes[line_str]
 		---@type LineDiff
 		local line_diff = change
-		if relative_line_num and relative_line_num > 0 then
+		if sorted_line_num > 0 then
 			-- Convert from relative line number to absolute buffer line number
 			-- diff_result line numbers are relative to the extracted range (startLine to endLineInclusive)
 			---@type integer
-			local absolute_line_num = (diff_result.startLine or 1) + relative_line_num - 1
+			local absolute_line_num = (diff_result.startLine or 1) + sorted_line_num - 1
 			-- Convert to 0-based line number for nvim API
 			---@type integer
 			local nvim_line = absolute_line_num - 1
@@ -438,8 +449,13 @@ local function show_completion(diff_result)
 				local syntax_ft = vim.api.nvim_get_option_value("filetype", { buf = current_buf })
 				local buf_line_count = vim.api.nvim_buf_line_count(current_buf)
 
+				-- Calculate the adjusted line position accounting for previous additions
+				-- Ensure it never goes negative (clamp to 0)
+				local adjusted_nvim_line = math.max(0, nvim_line - addition_offset)
+
 				-- Create a single virtual line at the correct position
 				local virtual_extmark_id
+				local overlay_line
 				if nvim_line >= buf_line_count then
 					-- Addition is beyond buffer - place at end
 					local last_existing_line = buf_line_count - 1
@@ -448,31 +464,26 @@ local function show_completion(diff_result)
 							virt_lines = { { { "", "Normal" } } },
 							virt_lines_above = false, -- Place below existing content
 						})
+					overlay_line = buf_line_count -- Position after last existing line
 				else
 					-- Addition is within buffer - place above the target line
 					virtual_extmark_id = vim.api.nvim_buf_set_extmark(
 						current_buf,
 						daemon.get_namespace_id(),
-						nvim_line - addition_offset,
+						adjusted_nvim_line,
 						0,
 						{
 							virt_lines = { { { "", "Normal" } } },
 							virt_lines_above = true, -- Place above the target line
 						}
 					)
+					-- Overlay should match where the virtual line was placed
+					overlay_line = adjusted_nvim_line
 				end
 				table.insert(completion_extmarks, { buf = current_buf, extmark_id = virtual_extmark_id })
 
 				-- Create overlay window over the virtual line with addition background
 				if line_diff.content and line_diff.content ~= "" then
-					-- Position overlay window to match virtual line placement
-					local overlay_line
-					if nvim_line >= buf_line_count then
-						overlay_line = buf_line_count -- Position after last existing line
-					else
-						overlay_line = nvim_line -- Position at target line
-					end
-
 					local overlay_win, overlay_buf, _ = create_overlay_window(
 						current_win,
 						overlay_line,
@@ -538,6 +549,10 @@ local function show_completion(diff_result)
 				local first_addition_line = (diff_result.startLine or 1) + line_diff.startLine - 1
 				local first_virtual_line = first_addition_line - 1 -- Convert to 0-based for nvim API
 
+				-- Calculate the adjusted line position accounting for previous additions
+				-- Ensure it never goes negative (clamp to 0)
+				local adjusted_first_virtual_line = math.max(0, first_virtual_line - addition_offset)
+
 				-- Create all virtual lines as a single extmark at the first addition position
 				local virt_lines_array = {}
 				for _ = 1, #line_diff.groupLines do
@@ -545,6 +560,7 @@ local function show_completion(diff_result)
 				end
 
 				local virtual_extmark_id
+				local overlay_line
 				if first_virtual_line >= buf_line_count then
 					-- All additions are beyond buffer - place at end
 					local last_existing_line = buf_line_count - 1
@@ -553,34 +569,27 @@ local function show_completion(diff_result)
 							virt_lines = virt_lines_array,
 							virt_lines_above = false, -- Place below existing content
 						})
+					overlay_line = buf_line_count
 				else
 					-- Additions start within buffer - place above the target line
 					virtual_extmark_id = vim.api.nvim_buf_set_extmark(
 						current_buf,
 						daemon.get_namespace_id(),
-						first_virtual_line - addition_offset,
+						adjusted_first_virtual_line,
 						0,
 						{
 							virt_lines = virt_lines_array,
 							virt_lines_above = true, -- Place above the target line
 						}
 					)
+					-- Overlay should match where the virtual lines were placed
+					overlay_line = adjusted_first_virtual_line
 				end
 
 				table.insert(completion_extmarks, { buf = current_buf, extmark_id = virtual_extmark_id })
 
 				-- Create overlay windows for the addition group
 				if line_diff.groupLines and #line_diff.groupLines > 0 then
-					-- Position overlay window to match where virtual lines were created
-					local overlay_line
-					if first_virtual_line >= buf_line_count then
-						-- Virtual lines were placed at end - overlay should be positioned after last existing line
-						overlay_line = buf_line_count
-					else
-						-- Virtual lines were placed above first_virtual_line - overlay should match
-						overlay_line = first_virtual_line
-					end
-
 					local overlay_win, overlay_buf, _ = create_overlay_window(
 						current_win,
 						overlay_line,

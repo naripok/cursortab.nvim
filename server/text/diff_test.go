@@ -806,6 +806,297 @@ func TestLineChangeClassification(t *testing.T) {
 	}
 }
 
+// Edge case tests for cursor at top/end of file
+
+func TestEmptyOldText(t *testing.T) {
+	// Edge case: starting from empty file
+	text1 := ""
+	text2 := "line 1\nline 2\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should detect additions for all lines
+	if len(actual.Changes) == 0 {
+		t.Error("Expected changes when adding content to empty file")
+	}
+
+	// Cursor should be positioned
+	if actual.CursorLine == -1 {
+		t.Error("Expected cursor positioning when adding to empty file")
+	}
+
+	t.Logf("Changes detected: %d", len(actual.Changes))
+	for lineNum, change := range actual.Changes {
+		t.Logf("  Line %d: %s", lineNum, change.Type.String())
+	}
+}
+
+func TestEmptyNewText(t *testing.T) {
+	// Edge case: deleting everything
+	text1 := "line 1\nline 2\nline 3"
+	text2 := ""
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should detect deletions for all lines
+	if len(actual.Changes) == 0 {
+		t.Error("Expected changes when deleting all content")
+	}
+
+	// Should be only deletions
+	if !actual.IsOnlyLineDeletion {
+		t.Error("Expected IsOnlyLineDeletion to be true")
+	}
+
+	// No cursor positioning for deletions
+	if actual.CursorLine != -1 {
+		t.Errorf("Expected no cursor positioning for deletions, got line %d", actual.CursorLine)
+	}
+}
+
+func TestSingleLineFile(t *testing.T) {
+	// Edge case: single line file modification
+	text1 := "hello"
+	text2 := "hello world"
+
+	actual := analyzeDiff(text1, text2)
+
+	expected := &DiffResult{
+		Changes: map[int]LineDiff{
+			1: {
+				Type:       LineAppendChars,
+				LineNumber: 1,
+				Content:    "hello world",
+				OldContent: "hello",
+				ColStart:   5,
+				ColEnd:     11,
+			},
+		},
+		IsOnlyLineDeletion:   false,
+		LastDeletion:         -1,
+		LastAddition:         -1,
+		LastLineModification: -1,
+		LastAppendChars:      1,
+		LastDeleteChars:      -1,
+		LastReplaceChars:     -1,
+		CursorLine:           1,
+		CursorCol:            11,
+	}
+
+	assertDiffResultEqual(t, expected, actual)
+}
+
+func TestAdditionAtFirstLine(t *testing.T) {
+	// Edge case: adding content before line 1
+	text1 := "line 2\nline 3"
+	text2 := "line 1\nline 2\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should have an addition at line 1
+	if change, exists := actual.Changes[1]; !exists {
+		t.Error("Expected addition at line 1")
+	} else if change.Type != LineAddition {
+		t.Errorf("Expected addition type, got %s", change.Type.String())
+	}
+
+	// Cursor should be positioned at the addition
+	if actual.CursorLine != 1 {
+		t.Errorf("Expected cursor at line 1, got %d", actual.CursorLine)
+	}
+}
+
+func TestMultipleAdditionsAtBeginning(t *testing.T) {
+	// Edge case: adding multiple lines at the very beginning
+	text1 := "original line"
+	text2 := "new line 1\nnew line 2\nnew line 3\noriginal line"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should group consecutive additions
+	t.Logf("Changes detected: %d", len(actual.Changes))
+	for lineNum, change := range actual.Changes {
+		t.Logf("  Line %d: %s - %q", lineNum, change.Type.String(), change.Content)
+		if change.Type == LineAdditionGroup {
+			t.Logf("    GroupLines: %v", change.GroupLines)
+			t.Logf("    StartLine: %d, EndLine: %d", change.StartLine, change.EndLine)
+		}
+	}
+
+	// Should have additions (either grouped or individual)
+	if len(actual.Changes) == 0 {
+		t.Error("Expected changes for additions at beginning")
+	}
+
+	// Cursor should be positioned
+	if actual.CursorLine == -1 {
+		t.Error("Expected cursor positioning for additions")
+	}
+}
+
+func TestModificationAtFirstLine(t *testing.T) {
+	// Edge case: modifying line 1
+	text1 := "old content\nline 2"
+	text2 := "new content here\nline 2"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should have a modification at line 1
+	if change, exists := actual.Changes[1]; !exists {
+		t.Error("Expected change at line 1")
+	} else {
+		t.Logf("Line 1 change type: %s", change.Type.String())
+	}
+
+	// Cursor should be positioned at line 1
+	if actual.CursorLine != 1 {
+		t.Errorf("Expected cursor at line 1, got %d", actual.CursorLine)
+	}
+}
+
+func TestAdditionAtEndOfFile(t *testing.T) {
+	// Edge case: adding lines at the end
+	// Note: The diff algorithm may detect line 2 as modified due to trailing newline differences
+	// when the old text doesn't have a trailing newline but the new text does
+	text1 := "line 1\nline 2\n"
+	text2 := "line 1\nline 2\nline 3\nline 4\n"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should have additions at lines 3 and 4 (possibly grouped)
+	t.Logf("Changes detected: %d", len(actual.Changes))
+	for lineNum, change := range actual.Changes {
+		t.Logf("  Line %d: %s - content: %q", lineNum, change.Type.String(), change.Content)
+	}
+
+	// Verify we have additions
+	hasAddition := false
+	for _, change := range actual.Changes {
+		if change.Type == LineAddition || change.Type == LineAdditionGroup {
+			hasAddition = true
+			break
+		}
+	}
+	if !hasAddition {
+		t.Error("Expected at least one addition")
+	}
+
+	// Cursor should be positioned at some change
+	if actual.CursorLine == -1 {
+		t.Error("Expected cursor positioning for additions")
+	}
+	t.Logf("Cursor position: line=%d, col=%d", actual.CursorLine, actual.CursorCol)
+}
+
+func TestDeletionAtFirstLine(t *testing.T) {
+	// Edge case: deleting line 1
+	text1 := "line 1\nline 2\nline 3"
+	text2 := "line 2\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should have a deletion at line 1
+	if change, exists := actual.Changes[1]; !exists {
+		t.Error("Expected deletion at line 1")
+	} else if change.Type != LineDeletion {
+		t.Errorf("Expected deletion type, got %s", change.Type.String())
+	}
+
+	// Should be only deletion
+	if !actual.IsOnlyLineDeletion {
+		t.Error("Expected IsOnlyLineDeletion to be true")
+	}
+}
+
+func TestDeletionAtLastLine(t *testing.T) {
+	// Edge case: deleting the last line
+	text1 := "line 1\nline 2\nline 3"
+	text2 := "line 1\nline 2"
+
+	actual := analyzeDiff(text1, text2)
+
+	// Should have a deletion at line 3
+	if change, exists := actual.Changes[3]; !exists {
+		t.Error("Expected deletion at line 3")
+	} else if change.Type != LineDeletion {
+		t.Errorf("Expected deletion type, got %s", change.Type.String())
+	}
+
+	// LastDeletion should be 3
+	if actual.LastDeletion != 3 {
+		t.Errorf("Expected LastDeletion=3, got %d", actual.LastDeletion)
+	}
+}
+
+func TestCursorPositionBeyondBuffer(t *testing.T) {
+	// Edge case: new text longer than old, cursor should be within bounds
+	text1 := "a"
+	text2 := "a\nb\nc\nd\ne"
+
+	actual := analyzeDiff(text1, text2)
+
+	newLines := strings.Split(text2, "\n")
+
+	// Cursor line should be within the new text bounds
+	if actual.CursorLine > len(newLines) {
+		t.Errorf("Cursor line %d exceeds new text line count %d", actual.CursorLine, len(newLines))
+	}
+
+	// Cursor col should be within the line bounds
+	if actual.CursorLine > 0 && actual.CursorLine <= len(newLines) {
+		lineContent := newLines[actual.CursorLine-1]
+		if actual.CursorCol > len(lineContent) {
+			t.Errorf("Cursor col %d exceeds line length %d", actual.CursorCol, len(lineContent))
+		}
+	}
+
+	t.Logf("Cursor position: line=%d, col=%d", actual.CursorLine, actual.CursorCol)
+}
+
+func TestIfCompletionBug(t *testing.T) {
+	// Reproduce bug: typing "if " and getting completion to "if __name__ == "__main__":"
+	// The preview was showing "if " as deleted instead of showing the completion
+	oldText := `def bubble_sort(arr):
+    n = len(arr)
+    for i in range(n):
+        for j in range(0, n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
+
+if `
+
+	newText := `def bubble_sort(arr):
+    n = len(arr)
+    for i in range(n):
+        for j in range(0, n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
+
+if __name__ == "__main__":
+    arr = [64, 34, 25, 12, 22, 11, 90]
+    sorted_arr = bubble_sort(arr)
+    print(sorted_arr)`
+
+	actual := analyzeDiff(oldText, newText)
+
+	// Line 9 ("if " -> "if __name__ == "__main__":") should be append_chars, not deletion
+	change9, exists := actual.Changes[9]
+	if !exists {
+		t.Fatal("Expected a change at line 9 (the 'if ' line)")
+	}
+	if change9.Type == LineDeletion {
+		t.Error("Line 9 should not be categorized as deletion")
+	}
+	if change9.Type != LineAppendChars {
+		t.Errorf("Expected append_chars, got %s", change9.Type.String())
+	}
+	if change9.OldContent != "if " {
+		t.Errorf("Expected oldContent='if ', got %q", change9.OldContent)
+	}
+}
+
 func TestSingleLineToMultipleLinesWithSpacesReproduceBug(t *testing.T) {
 	// This reproduces the bug where typing 'def test' in a one-line buffer
 	// and getting a completion with multiple new lines only shows the first two changes
