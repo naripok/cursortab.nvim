@@ -228,8 +228,8 @@ func (b *Buffer) OnCompletionReady(n *nvim.Nvim, startLine, endLineInclusive int
 // CommitPendingEdit applies the pending edit to buffer state, increments version,
 // and appends a structured diff entry showing before/after content. No-op if no pending edit.
 //
-// Uses "working diff" pattern: creates diff from checkpoint (originalLines) to final state,
-// capturing both user typing and completion changes since last accept.
+// Records only the affected line range in the diff history (not the entire file),
+// matching the format expected by the sweep model.
 func (b *Buffer) CommitPendingEdit() {
 	if !b.hasPending {
 		return
@@ -239,20 +239,15 @@ func (b *Buffer) CommitPendingEdit() {
 	endLineInclusive := b.pendingEndLineInclusive
 	lines := b.pendingLines
 
-	// First compute the final buffer state after applying the completion
-	newLines := make([]string, 0, len(b.Lines)-((endLineInclusive-startLine)+1)+len(lines))
-	if startLine-1 > 0 && startLine-1 <= len(b.Lines) {
-		newLines = append(newLines, b.Lines[:startLine-1]...)
-	}
-	newLines = append(newLines, lines...)
-	if endLineInclusive < len(b.Lines) {
-		newLines = append(newLines, b.Lines[endLineInclusive:]...)
+	// Extract only the affected original lines (the range being replaced)
+	var originalRangeLines []string
+	for i := startLine; i <= endLineInclusive && i-1 < len(b.originalLines); i++ {
+		originalRangeLines = append(originalRangeLines, b.originalLines[i-1])
 	}
 
-	// Create diff from checkpoint (originalLines) to final state (newLines)
-	// This captures all changes since last accept: user typing + completion
-	originalContent := strings.Join(b.originalLines, "\n")
-	updatedContent := strings.Join(newLines, "\n")
+	// Create diff entry with only the affected content (not the entire file)
+	originalContent := strings.Join(originalRangeLines, "\n")
+	updatedContent := strings.Join(lines, "\n")
 
 	// Only record diff if there's an actual change
 	if originalContent != updatedContent {
@@ -261,6 +256,16 @@ func (b *Buffer) CommitPendingEdit() {
 			Updated:  updatedContent,
 		}
 		b.DiffHistories = append(b.DiffHistories, diffEntry)
+	}
+
+	// Compute the final buffer state after applying the completion
+	newLines := make([]string, 0, len(b.Lines)-((endLineInclusive-startLine)+1)+len(lines))
+	if startLine-1 > 0 && startLine-1 <= len(b.Lines) {
+		newLines = append(newLines, b.Lines[:startLine-1]...)
+	}
+	newLines = append(newLines, lines...)
+	if endLineInclusive < len(b.Lines) {
+		newLines = append(newLines, b.Lines[endLineInclusive:]...)
 	}
 
 	// Reset checkpoint to current state for next working diff
