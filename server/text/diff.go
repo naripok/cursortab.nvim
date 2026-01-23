@@ -451,9 +451,10 @@ func processLineDiffs(lineDiffs []diffmatchpatch.Diff, result *DiffResult) {
 	}
 }
 
-// lineSimilarity computes a simple similarity score between two lines (0.0 to 1.0)
+// LineSimilarity computes a similarity score between two lines (0.0 to 1.0)
+// using Levenshtein ratio: 1 - (levenshtein_distance / max_length)
 // Higher score means more similar. Empty lines have 0 similarity with non-empty lines.
-func lineSimilarity(line1, line2 string) float64 {
+func LineSimilarity(line1, line2 string) float64 {
 	// Empty lines
 	if line1 == "" && line2 == "" {
 		return 1.0
@@ -462,25 +463,17 @@ func lineSimilarity(line1, line2 string) float64 {
 		return 0.0
 	}
 
-	// Use a simple approach: compute character-level diff ratio
+	// Use Levenshtein ratio for intuitive similarity scoring
 	dmp := diffmatchpatch.New()
 	diffs := dmp.DiffMain(line1, line2, false)
+	levenshteinDist := dmp.DiffLevenshtein(diffs)
 
-	// Count equal characters vs total characters
-	equalChars := 0
-	totalChars := 0
-	for _, diff := range diffs {
-		if diff.Type == diffmatchpatch.DiffEqual {
-			equalChars += len(diff.Text)
-		}
-		totalChars += len(diff.Text)
-	}
-
-	if totalChars == 0 {
+	maxLen := max(len(line1), len(line2))
+	if maxLen == 0 {
 		return 0.0
 	}
 
-	return float64(equalChars) / float64(totalChars)
+	return 1.0 - float64(levenshteinDist)/float64(maxLen)
 }
 
 // findBestMatch finds the best matching line in insertedLines for the given deletedLine
@@ -494,7 +487,7 @@ func findBestMatch(deletedLine string, insertedLines []string, usedInserts map[i
 			continue
 		}
 
-		similarity := lineSimilarity(deletedLine, insertedLine)
+		similarity := LineSimilarity(deletedLine, insertedLine)
 		if similarity > bestSimilarity {
 			bestSimilarity = similarity
 			bestIdx = i

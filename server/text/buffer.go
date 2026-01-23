@@ -216,7 +216,7 @@ func (b *Buffer) OnCompletionReady(n *nvim.Nvim, startLine, endLineInclusive int
 
 	// Debug logging for data sent to Lua
 	if jsonData, err := json.Marshal(luaDiffResult); err == nil {
-		logger.Debug("Sending to Lua on_completion_ready:\n  startLine: %d\n  endLineInclusive: %d\n  lines: %d\n  diffResult: %s",
+		logger.Debug("sending to lua on_completion_ready:\n  startLine: %d\n  endLineInclusive: %d\n  lines: %d\n  diffResult: %s",
 			startLine, endLineInclusive, len(lines), string(jsonData))
 	}
 
@@ -280,12 +280,12 @@ func (b *Buffer) CommitPendingEdit() {
 }
 
 func (b *Buffer) OnCursorPredictionReady(n *nvim.Nvim, line int) {
-	logger.Debug("Sending to Lua on_cursor_prediction_ready: line=%d", line)
+	logger.Debug("sending to lua on_cursor_prediction_ready: line=%d", line)
 	b.executeLuaFunction(n, "require('cursortab').on_cursor_prediction_ready(...)", line)
 }
 
 func (b *Buffer) OnReject(n *nvim.Nvim) {
-	logger.Debug("Sending to Lua on_reject")
+	logger.Debug("sending to lua on_reject")
 	b.executeLuaFunction(n, `require('cursortab').on_reject()`)
 }
 

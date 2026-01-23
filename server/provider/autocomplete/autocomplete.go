@@ -3,6 +3,7 @@ package autocomplete
 import (
 	"bytes"
 	"context"
+	"cursortab/logger"
 	"cursortab/types"
 	"encoding/json"
 	"fmt"
@@ -128,8 +129,9 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		}, nil
 	}
 
-	// Extract the completion text
+	// Extract the completion text and finish reason
 	completionText := completionResp.Choices[0].Text
+	finishReason := completionResp.Choices[0].FinishReason
 
 	// If the completion is empty or just whitespace, return empty response
 	if strings.TrimSpace(completionText) == "" {
@@ -139,10 +141,31 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		}, nil
 	}
 
+	// For single-line completions, if we hit max_tokens (finish_reason == "length"),
+	// it means the completion was truncated - we should reject it as incomplete
+	if finishReason == "length" {
+		logger.Info("autocomplete completion truncated: rejected (finish_reason=length, output_len=%d chars)", len(completionText))
+		return &types.CompletionResponse{
+			Completions:  []*types.Completion{},
+			CursorTarget: nil,
+		}, nil
+	}
+
 	// Build the completion result
 	// For end-of-line completion, we replace from cursor position to end of current line
 	currentLine := req.Lines[req.CursorRow-1]
-	beforeCursor := currentLine[:req.CursorCol]
+	cursorCol := min(req.CursorCol, len(currentLine))
+	beforeCursor := currentLine[:cursorCol]
+	afterCursor := currentLine[cursorCol:]
+
+	// If the completion matches what's already after the cursor, no change needed
+	if completionText == afterCursor {
+		return &types.CompletionResponse{
+			Completions:  []*types.Completion{},
+			CursorTarget: nil,
+		}, nil
+	}
+
 	newLine := beforeCursor + completionText
 
 	completion := &types.Completion{

@@ -5,6 +5,7 @@ import (
 	"context"
 	"cursortab/logger"
 	"cursortab/types"
+	"cursortab/utils"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -96,7 +97,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	reqBody := reqBodyBuf.Bytes()
 
 	// Debug logging for request
-	logger.Debug("Sweep provider request to %s:\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
+	logger.Debug("sweep provider request to %s:\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
 		p.url+"/v1/completions",
 		completionReq.Model,
 		completionReq.Temperature,
@@ -137,7 +138,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	}
 
 	// Debug logging for response
-	logger.Debug("Sweep provider response:\n  ID: %s\n  Model: %s\n  Choices: %d\n  Usage: prompt=%d, completion=%d, total=%d",
+	logger.Debug("sweep provider response:\n  ID: %s\n  Model: %s\n  Choices: %d\n  Usage: prompt=%d, completion=%d, total=%d",
 		completionResp.ID,
 		completionResp.Model,
 		len(completionResp.Choices),
@@ -147,7 +148,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 
 	// Check if we got any completions
 	if len(completionResp.Choices) == 0 {
-		logger.Debug("Sweep provider returned no completions")
+		logger.Debug("sweep provider returned no completions")
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
 			CursorTarget: nil,
@@ -156,11 +157,11 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 
 	// Extract the completion text (this is the predicted updated content)
 	completionText := completionResp.Choices[0].Text
-	logger.Debug("Sweep completion text (%d chars):\n%s", len(completionText), completionText)
+	logger.Debug("sweep completion text (%d chars):\n%s", len(completionText), completionText)
 
 	// If the completion is empty or just whitespace, return empty response
 	if strings.TrimSpace(completionText) == "" {
-		logger.Debug("Sweep completion text is empty after trimming")
+		logger.Debug("sweep completion text is empty after trimming")
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
 			CursorTarget: nil,
@@ -168,16 +169,17 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	}
 
 	// Parse the completion into a result
-	completion := p.parseCompletion(req, completionText)
+	finishReason := completionResp.Choices[0].FinishReason
+	completion := p.parseCompletion(req, completionText, finishReason)
 	if completion == nil {
-		logger.Debug("Sweep parseCompletion returned nil (no changes detected)")
+		logger.Debug("sweep parseCompletion returned nil (no changes detected)")
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
 			CursorTarget: nil,
 		}, nil
 	}
 
-	logger.Debug("Sweep parsed completion: StartLine=%d, EndLineInc=%d, Lines=%d", completion.StartLine, completion.EndLineInc, len(completion.Lines))
+	logger.Debug("sweep parsed completion: StartLine=%d, EndLineInc=%d, Lines=%d", completion.StartLine, completion.EndLineInc, len(completion.Lines))
 
 	return &types.CompletionResponse{
 		Completions:  []*types.Completion{completion},
@@ -292,7 +294,8 @@ func (p *Provider) getOriginalWindowContent(req *types.CompletionRequest, window
 }
 
 // parseCompletion parses the model's completion (the predicted updated content)
-func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText string) *types.Completion {
+// finishReason indicates why the model stopped: "stop" (hit stop token) or "length" (hit max_tokens)
+func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText string, finishReason string) *types.Completion {
 	// The model outputs the updated window content directly
 	// Strip any trailing <|file_sep|> or </s> tokens that might have leaked
 	completionText = strings.TrimSuffix(completionText, "<|file_sep|>")
@@ -318,9 +321,30 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 	// Split new text into lines
 	newLines := strings.Split(completionText, "\n")
 
+	// Handle truncated output (finish_reason == "length") with anchor matching
+	processedLines, endLineInc, shouldReject := utils.HandleTruncatedCompletionWithAnchor(newLines, oldLines, finishReason, windowStart, windowEnd)
+	if shouldReject {
+		logger.Debug("sweep completion rejected: only truncated content")
+		return nil
+	}
+	newLines = processedLines
+
+	// Log if we had to adjust for truncation
+	if finishReason == "length" {
+		originalLineCount := len(strings.Split(completionText, "\n"))
+		logger.Info("sweep completion truncated: dropped last line, replacing lines %d-%d only (window was %d-%d, original_lines=%d, kept_lines=%d)",
+			windowStart+1, endLineInc, windowStart+1, windowEnd, originalLineCount, len(newLines))
+	}
+
+	// Final check: if after processing the text equals the portion we're replacing, no completion needed
+	replaceEnd := min(endLineInc-windowStart, len(oldLines))
+	if utils.IsNoOpReplacement(newLines, oldLines[:replaceEnd]) {
+		return nil
+	}
+
 	return &types.Completion{
 		StartLine:  windowStart + 1, // Convert back to 1-indexed
-		EndLineInc: windowEnd,       // windowEnd is 0-indexed exclusive = 1-indexed inclusive
+		EndLineInc: endLineInc,
 		Lines:      newLines,
 	}
 }

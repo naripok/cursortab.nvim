@@ -3,13 +3,13 @@
 A Neovim plugin that provides edit completions and cursor predictions. Currently
 supports custom models and models form Zeta (Zed) and SweepAI.
 
+> [!WARNING]
+>
+> **This is an early-stage, alpha project.** Expect bugs, incomplete features, and breaking changes.
+
 <p align="center">
     <img src="assets/preview.png" width=512></img>
 </p>
-
-> [!WARNING]
->
-> This plugin is a work in progress, expect bugs and breaking changes.
 
 ## Installation
 
@@ -98,8 +98,6 @@ require("cursortab").setup({
   provider = "autocomplete",
   provider_url = "http://localhost:8000",
   provider_model = "autocomplete",
-  provider_temperature = 0.0,
-  provider_max_tokens = 256,
 })
 ```
 
@@ -148,8 +146,6 @@ require("cursortab").setup({
   provider = "sweep",
   provider_url = "http://localhost:8000",
   provider_model = "sweep-next-edit-1.5b",
-  provider_temperature = 0.0,
-  provider_max_tokens = 100,
 })
 ```
 

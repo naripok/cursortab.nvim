@@ -5,6 +5,7 @@ import (
 	"context"
 	"cursortab/logger"
 	"cursortab/types"
+	"cursortab/utils"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,7 +106,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	reqBody := reqBodyBuf.Bytes()
 
 	// Debug logging for request
-	logger.Debug("Zeta provider request to %s:\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
+	logger.Debug("zeta provider request to %s:\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
 		p.url+"/v1/completions",
 		completionReq.Model,
 		completionReq.Temperature,
@@ -146,7 +147,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	}
 
 	// Debug logging for response
-	logger.Debug("Zeta provider response:\n  ID: %s\n  Model: %s\n  Choices: %d\n  Usage: prompt=%d, completion=%d, total=%d",
+	logger.Debug("zeta provider response:\n  ID: %s\n  Model: %s\n  Choices: %d\n  Usage: prompt=%d, completion=%d, total=%d",
 		completionResp.ID,
 		completionResp.Model,
 		len(completionResp.Choices),
@@ -156,7 +157,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 
 	// Check if we got any completions
 	if len(completionResp.Choices) == 0 {
-		logger.Debug("Zeta provider returned no completions")
+		logger.Debug("zeta provider returned no completions")
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
 			CursorTarget: nil,
@@ -165,11 +166,11 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 
 	// Extract the completion text
 	completionText := completionResp.Choices[0].Text
-	logger.Debug("Zeta completion text (%d chars):\n%s", len(completionText), completionText)
+	logger.Debug("zeta completion text (%d chars):\n%s", len(completionText), completionText)
 
 	// If the completion is empty or just whitespace, return empty response
 	if strings.TrimSpace(completionText) == "" {
-		logger.Debug("Zeta completion text is empty after trimming")
+		logger.Debug("zeta completion text is empty after trimming")
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
 			CursorTarget: nil,
@@ -177,16 +178,17 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	}
 
 	// Parse the completion into lines and build the result
-	completion := p.parseCompletion(req, completionText)
+	finishReason := completionResp.Choices[0].FinishReason
+	completion := p.parseCompletion(req, completionText, finishReason)
 	if completion == nil {
-		logger.Debug("Zeta parseCompletion returned nil (no changes detected)")
+		logger.Debug("zeta parseCompletion returned nil (no changes detected)")
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
 			CursorTarget: nil,
 		}, nil
 	}
 
-	logger.Debug("Zeta parsed completion: StartLine=%d, EndLineInc=%d, Lines=%d", completion.StartLine, completion.EndLineInc, len(completion.Lines))
+	logger.Debug("zeta parsed completion: StartLine=%d, EndLineInc=%d, Lines=%d", completion.StartLine, completion.EndLineInc, len(completion.Lines))
 
 	return &types.CompletionResponse{
 		Completions:  []*types.Completion{completion},
@@ -431,7 +433,8 @@ func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) st
 }
 
 // parseCompletion parses the model's completion text matching Zed's parsing logic
-func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText string) *types.Completion {
+// finishReason indicates why the model stopped: "stop" (hit stop token) or "length" (hit max_tokens)
+func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText string, finishReason string) *types.Completion {
 	// Remove cursor markers
 	content := strings.ReplaceAll(completionText, "<|user_cursor_is_here|>", "")
 
@@ -442,7 +445,7 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 	// Find the start marker
 	startIdx := strings.Index(content, startMarker)
 	if startIdx == -1 {
-		return p.parseSimpleCompletion(req, completionText)
+		return p.parseSimpleCompletion(req, completionText, finishReason)
 	}
 
 	// Slice from the start marker position onward
@@ -482,15 +485,35 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 	// Split new text into lines
 	newLines := strings.Split(newText, "\n")
 
+	// Handle truncated output (finish_reason == "length")
+	processedLines, endLineInc, shouldReject := utils.HandleTruncatedCompletion(newLines, finishReason, editableStart, editableEnd)
+	if shouldReject {
+		logger.Debug("zeta completion rejected: only truncated content")
+		return nil
+	}
+	newLines = processedLines
+
+	// Log if we had to adjust for truncation
+	if finishReason == "length" {
+		logger.Info("zeta completion truncated: dropped last line, replacing lines %d-%d only (editable region was %d-%d, original_lines=%d, kept_lines=%d)",
+			editableStart+1, endLineInc, editableStart+1, editableEnd, len(strings.Split(newText, "\n")), len(newLines))
+	}
+
+	// Final check: if after processing the text equals the portion we're replacing, no completion needed
+	if utils.IsNoOpReplacement(newLines, req.Lines[editableStart:endLineInc]) {
+		return nil
+	}
+
 	return &types.Completion{
 		StartLine:  editableStart + 1, // Convert back to 1-indexed
-		EndLineInc: editableEnd,       // Already 1-indexed exclusive -> inclusive
+		EndLineInc: endLineInc,
 		Lines:      newLines,
 	}
 }
 
 // parseSimpleCompletion is a fallback parser for when markers aren't found
-func (p *Provider) parseSimpleCompletion(req *types.CompletionRequest, completionText string) *types.Completion {
+// finishReason indicates why the model stopped: "stop" (hit stop token) or "length" (hit max_tokens)
+func (p *Provider) parseSimpleCompletion(req *types.CompletionRequest, completionText string, finishReason string) *types.Completion {
 	// Split into lines
 	completionLines := strings.Split(completionText, "\n")
 
@@ -521,8 +544,31 @@ func (p *Provider) parseSimpleCompletion(req *types.CompletionRequest, completio
 	// Add remaining completion lines
 	resultLines = append(resultLines, completionLines[1:]...)
 
-	// Determine the end line
+	// Determine the end line (1-indexed inclusive)
 	endLine := cursorRow + len(completionLines) - 1
+
+	// Handle truncated output (finish_reason == "length")
+	// Note: windowStart is 0-indexed, windowEnd is passed as 1-indexed inclusive (the final EndLineInc value)
+	// When not truncated, windowEnd is returned directly; when truncated, windowStart + len(newLines) is calculated
+	// which gives the correct 1-indexed inclusive value due to the 0-indexed + count relationship
+	processedLines, adjustedEndLine, shouldReject := utils.HandleTruncatedCompletion(resultLines, finishReason, cursorRow-1, endLine)
+	if shouldReject {
+		logger.Debug("zeta simple completion rejected: only truncated content")
+		return nil
+	}
+	resultLines = processedLines
+	endLine = adjustedEndLine
+
+	// Log if we had to adjust for truncation
+	if finishReason == "length" {
+		logger.Info("zeta simple completion truncated: dropped last line (original_lines=%d, kept_lines=%d)",
+			len(completionLines), len(resultLines))
+	}
+
+	// Final check: if after processing the text equals the portion we're replacing, no completion needed
+	if endLine <= len(req.Lines) && utils.IsNoOpReplacement(resultLines, req.Lines[cursorRow-1:endLine]) {
+		return nil
+	}
 
 	return &types.Completion{
 		StartLine:  cursorRow,
