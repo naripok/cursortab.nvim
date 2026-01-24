@@ -36,7 +36,3 @@ Follow semantic versioning.
    git tag -a v0.1.0-beta -m "v0.1.0-beta"
    git push origin v0.1.0-beta
    ```
-
-3. Create GitHub release with:
-   - Tag version
-   - Changelog summary
