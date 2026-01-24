@@ -73,8 +73,8 @@ func NewProvider(config *types.ProviderConfig) (*Provider, error) {
 // GetCompletion implements types.Provider.GetCompletion for Sweep
 // Uses the Sweep Next-Edit format with <|file_sep|> tokens
 func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error) {
-	// Build the prompt in Sweep's format
-	prompt := p.buildPrompt(req)
+	// Build the prompt in Sweep's format (also returns window bounds for parseCompletion)
+	prompt, windowStart, windowEnd := p.buildPrompt(req)
 
 	// Create the completion request
 	completionReq := completionRequest{
@@ -168,9 +168,9 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		}, nil
 	}
 
-	// Parse the completion into a result
+	// Parse the completion into a result (pass window bounds from buildPrompt)
 	finishReason := completionResp.Choices[0].FinishReason
-	completion := p.parseCompletion(req, completionText, finishReason)
+	completion := p.parseCompletion(req, completionText, finishReason, windowStart, windowEnd)
 	if completion == nil {
 		logger.Debug("sweep parseCompletion returned nil (no changes detected)")
 		return &types.CompletionResponse{
@@ -201,37 +201,57 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 //	<|file_sep|>updated/{file_path}
 //
 // The model generates the updated content after the last marker.
-func (p *Provider) buildPrompt(req *types.CompletionRequest) string {
+// Uses token-based context limiting (max_context_tokens) around the cursor.
+// Returns: (prompt, windowStart, windowEnd) where window bounds are 0-indexed line numbers.
+func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int) {
 	var promptBuilder strings.Builder
 
-	// Add recent diffs in Sweep's original/updated format
-	p.addRecentDiffs(&promptBuilder, req)
+	// Handle empty file edge case
+	if len(req.Lines) == 0 {
+		promptBuilder.WriteString("<|file_sep|>original/")
+		promptBuilder.WriteString(req.FilePath)
+		promptBuilder.WriteString("\n\n")
+		promptBuilder.WriteString("<|file_sep|>current/")
+		promptBuilder.WriteString(req.FilePath)
+		promptBuilder.WriteString("\n\n")
+		promptBuilder.WriteString("<|file_sep|>updated/")
+		promptBuilder.WriteString(req.FilePath)
+		promptBuilder.WriteString("\n")
+		return promptBuilder.String(), 0, 0
+	}
 
-	// Calculate the 21-line window (10 above + cursor line + 10 below)
+	// 1. Build diff history section (already trimmed by engine)
+	diffSection := p.buildDiffSection(req)
+
+	// 2. Trim content around cursor using max_context_tokens
 	cursorLine := req.CursorRow - 1 // Convert to 0-indexed
-	windowStart := max(0, cursorLine-10)
-	windowEnd := min(len(req.Lines), cursorLine+10+1)
+	trimmedLines, _, _, trimOffset := utils.TrimContentAroundCursor(
+		req.Lines, cursorLine, req.CursorCol, p.config.MaxTokens)
 
-	// Get the current window content
-	currentWindowLines := req.Lines[windowStart:windowEnd]
-	currentWindowContent := strings.Join(currentWindowLines, "\n")
+	// Calculate window bounds for parseCompletion
+	windowStart := trimOffset
+	windowEnd := trimOffset + len(trimmedLines)
 
-	// Get the original window content (before most recent change)
-	// We reconstruct this from the diff history if available
-	originalWindowContent := p.getOriginalWindowContent(req, windowStart, windowEnd)
+	// 3. Get original content with same trim window
+	originalLines := p.getTrimmedOriginalContent(req, trimOffset, len(trimmedLines))
+
+	// Write diff section if present
+	if diffSection != "" {
+		promptBuilder.WriteString(diffSection)
+	}
 
 	// Add original/{file_path} section
 	promptBuilder.WriteString("<|file_sep|>original/")
 	promptBuilder.WriteString(req.FilePath)
 	promptBuilder.WriteString("\n")
-	promptBuilder.WriteString(originalWindowContent)
+	promptBuilder.WriteString(strings.Join(originalLines, "\n"))
 	promptBuilder.WriteString("\n")
 
 	// Add current/{file_path} section
 	promptBuilder.WriteString("<|file_sep|>current/")
 	promptBuilder.WriteString(req.FilePath)
 	promptBuilder.WriteString("\n")
-	promptBuilder.WriteString(currentWindowContent)
+	promptBuilder.WriteString(strings.Join(trimmedLines, "\n"))
 	promptBuilder.WriteString("\n")
 
 	// Add updated/{file_path} marker - model generates from here
@@ -239,22 +259,19 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) string {
 	promptBuilder.WriteString(req.FilePath)
 	promptBuilder.WriteString("\n")
 
-	return promptBuilder.String()
+	return promptBuilder.String(), windowStart, windowEnd
 }
 
-// addRecentDiffs adds the recent diffs in Sweep's original/updated format
-// Uses the structured DiffEntry which contains actual before/after content
-func (p *Provider) addRecentDiffs(builder *strings.Builder, req *types.CompletionRequest) {
+// buildDiffSection builds the diff history section in Sweep's format.
+// Diff entries are already trimmed by the engine using max_diff_history_tokens.
+func (p *Provider) buildDiffSection(req *types.CompletionRequest) string {
 	if len(req.FileDiffHistories) == 0 {
-		return
+		return ""
 	}
 
-	for _, fileHistory := range req.FileDiffHistories {
-		if len(fileHistory.DiffHistory) == 0 {
-			continue
-		}
+	var builder strings.Builder
 
-		// Each DiffEntry contains the actual original and updated content
+	for _, fileHistory := range req.FileDiffHistories {
 		for _, diffEntry := range fileHistory.DiffHistory {
 			if diffEntry.Original == "" && diffEntry.Updated == "" {
 				continue
@@ -270,32 +287,38 @@ func (p *Provider) addRecentDiffs(builder *strings.Builder, req *types.Completio
 			builder.WriteString("\n")
 		}
 	}
+
+	return builder.String()
 }
 
-// getOriginalWindowContent returns the content to use for the "original/" section.
-// This is the file state before the most recent change, as expected by the sweep model.
-func (p *Provider) getOriginalWindowContent(req *types.CompletionRequest, windowStart, windowEnd int) string {
+// getTrimmedOriginalContent returns the original content (before most recent change)
+// trimmed to match the same window as the current content
+func (p *Provider) getTrimmedOriginalContent(req *types.CompletionRequest, trimOffset, lineCount int) []string {
 	// Use PreviousLines if available, otherwise fall back to current Lines
 	sourceLines := req.PreviousLines
 	if len(sourceLines) == 0 {
 		sourceLines = req.Lines
 	}
 
-	// Clamp window bounds to available lines
+	// Calculate window bounds
+	windowStart := trimOffset
+	windowEnd := trimOffset + lineCount
+
+	// Clamp to available lines
 	if windowStart >= len(sourceLines) {
-		return ""
+		return []string{}
 	}
 	if windowEnd > len(sourceLines) {
 		windowEnd = len(sourceLines)
 	}
 
-	windowLines := sourceLines[windowStart:windowEnd]
-	return strings.Join(windowLines, "\n")
+	return sourceLines[windowStart:windowEnd]
 }
 
 // parseCompletion parses the model's completion (the predicted updated content)
 // finishReason indicates why the model stopped: "stop" (hit stop token) or "length" (hit max_tokens)
-func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText string, finishReason string) *types.Completion {
+// windowStart and windowEnd are 0-indexed line bounds from buildPrompt
+func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText string, finishReason string, windowStart, windowEnd int) *types.Completion {
 	// The model outputs the updated window content directly
 	// Strip any trailing <|file_sep|> or </s> tokens that might have leaked
 	completionText = strings.TrimSuffix(completionText, "<|file_sep|>")
@@ -304,10 +327,16 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 	completionText = strings.TrimLeft(completionText, "\n")
 	completionText = strings.TrimRight(completionText, " \t\n\r")
 
-	// Calculate the window that was sent in the prompt
-	cursorLine := req.CursorRow - 1 // Convert to 0-indexed
-	windowStart := max(0, cursorLine-10)
-	windowEnd := min(len(req.Lines), cursorLine+10+1)
+	// Bounds check for window (handles empty file and edge cases)
+	if windowStart < 0 {
+		windowStart = 0
+	}
+	if windowEnd > len(req.Lines) {
+		windowEnd = len(req.Lines)
+	}
+	if windowStart >= windowEnd || windowStart >= len(req.Lines) {
+		return nil
+	}
 
 	// Get the original window content for comparison
 	oldLines := req.Lines[windowStart:windowEnd]

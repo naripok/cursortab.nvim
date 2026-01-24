@@ -341,8 +341,16 @@ func (p *Provider) buildInstructionPrompt(userEdits, diagnostics, userExcerpt st
 }
 
 // buildPromptWithSpecialTokens constructs the prompt with special tokens matching Zed's format
+// Uses max_context_tokens to limit the editable region size
 func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) string {
 	var promptBuilder strings.Builder
+
+	if len(req.Lines) == 0 {
+		promptBuilder.WriteString("```")
+		promptBuilder.WriteString(req.FilePath)
+		promptBuilder.WriteString("\n<|start_of_file|>\n<|editable_region_start|>\n<|user_cursor_is_here|>\n<|editable_region_end|>\n```")
+		return promptBuilder.String()
+	}
 
 	cursorRow := req.CursorRow // 1-indexed
 	cursorCol := req.CursorCol // 0-indexed
@@ -350,18 +358,19 @@ func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) st
 	// Convert cursor to 0-indexed for calculations
 	cursorLine := cursorRow - 1
 
-	// Determine the editable region (expand around cursor)
-	// Zed uses token-based limits: editableTokenLimit=350, contextTokenLimit=150
-	// For simplicity, we use line-based expansion which approximates this
+	// Use token-based trimming for editable region
+	_, _, _, trimOffset := utils.TrimContentAroundCursor(
+		req.Lines, cursorLine, cursorCol, p.config.MaxTokens)
 
-	// Editable region: about 10 lines before and after cursor
-	editableLinesBefore := 10
-	editableLinesAfter := 10
+	// Calculate editable region bounds from trim result
+	// Re-run to get the actual trimmed lines count
+	trimmedLines, _, _, _ := utils.TrimContentAroundCursor(
+		req.Lines, cursorLine, cursorCol, p.config.MaxTokens)
 
-	editableStart := max(0, cursorLine-editableLinesBefore)
-	editableEnd := min(len(req.Lines), cursorLine+editableLinesAfter+1)
+	editableStart := trimOffset
+	editableEnd := trimOffset + len(trimmedLines)
 
-	// Context region: additional lines around editable region
+	// Context region: additional 5 lines around editable region
 	contextLinesBefore := 5
 	contextLinesAfter := 5
 
@@ -468,10 +477,12 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 		newText = content[:endIdx]
 	}
 
-	// Calculate the editable region that was sent in the prompt
+	// Calculate the editable region that was sent in the prompt (same as buildPromptWithSpecialTokens)
 	cursorRow := req.CursorRow - 1 // Convert to 0-indexed
-	editableStart := max(0, cursorRow-10)
-	editableEnd := min(len(req.Lines), cursorRow+10+1)
+	trimmedLines, _, _, trimOffset := utils.TrimContentAroundCursor(
+		req.Lines, cursorRow, req.CursorCol, p.config.MaxTokens)
+	editableStart := trimOffset
+	editableEnd := trimOffset + len(trimmedLines)
 
 	// Get the old text of the editable region
 	oldLines := req.Lines[editableStart:editableEnd]

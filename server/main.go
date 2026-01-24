@@ -27,8 +27,9 @@ type Config struct {
 	ProviderTemperature    float64                `json:"provider_temperature"`
 	ProviderMaxTokens      int                    `json:"provider_max_tokens"`
 	ProviderTopK           int                    `json:"provider_top_k"`
-	MaxContextTokens       int                    `json:"max_context_tokens"` // max tokens for context trimming
-	LogLevel               string                 `json:"log_level"`          // debug, info, warn, error
+	MaxContextTokens       int                    `json:"max_context_tokens"`      // max tokens for content around cursor
+	MaxDiffHistoryTokens   int                    `json:"max_diff_history_tokens"` // max tokens for diff history
+	LogLevel               string                 `json:"log_level"`               // debug, info, warn, error
 	DebugImmediateShutdown bool                   `json:"debug_immediate_shutdown"`
 }
 

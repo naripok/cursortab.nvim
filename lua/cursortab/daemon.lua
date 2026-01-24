@@ -46,6 +46,7 @@ local function start_daemon()
 		completion_timeout = cfg.completion_timeout,
 		debug_immediate_shutdown = cfg.debug_immediate_shutdown,
 		max_context_tokens = cfg.max_context_tokens,
+		max_diff_history_tokens = cfg.max_diff_history_tokens,
 		provider_url = cfg.provider_url,
 		provider_model = cfg.provider_model,
 		provider_temperature = cfg.provider_temperature,

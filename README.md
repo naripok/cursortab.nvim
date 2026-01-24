@@ -66,7 +66,8 @@ require("cursortab").setup({
   },
 
   -- CONTEXT OPTIONS
-  max_context_tokens = 1024,         -- Max tokens to send as context (0 = no limit)
+  max_context_tokens = 2048,         -- Max tokens for content around cursor (0 = no limit)
+  max_diff_history_tokens = 512,     -- Max tokens for diff history (0 = no limit)
 
   -- PROVIDER OPTIONS (applied to all providers: autocomplete, sweep, zeta)
   provider_url = "http://localhost:8000",  -- URL of the provider server
@@ -133,7 +134,7 @@ Sweep Next-Edit 1.5B model for fast, accurate next-edit predictions.
 
 **Features:**
 
-- Multi-line completions with fixed 21-line window
+- Multi-line completions with token-based context (sends full file for small files, trimmed around cursor for large files)
 - Fast inference (~500ms on CPU, <100ms on GPU)
 - Outperforms larger models on next-edit accuracy
 - Open-source weights available

@@ -30,6 +30,7 @@
 ---@field provider_max_tokens integer
 ---@field provider_top_k integer
 ---@field max_context_tokens integer
+---@field max_diff_history_tokens integer
 ---@field log_level string
 
 -- Default configuration
@@ -66,7 +67,8 @@ local default_config = {
 	provider_top_k = 50, -- Top-k sampling (used by some providers)
 
 	-- Context Options
-	max_context_tokens = 1024, -- Max tokens to send as context (0 = no limit)
+	max_context_tokens = 2048, -- Max tokens for content around cursor (0 = no limit)
+	max_diff_history_tokens = 512, -- Max tokens for diff history (0 = no limit)
 
 	-- INTERNAL
 	log_level = "info", -- Log level: "debug", "info", "warn", "error"

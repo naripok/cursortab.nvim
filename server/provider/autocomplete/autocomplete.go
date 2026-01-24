@@ -5,6 +5,7 @@ import (
 	"context"
 	"cursortab/logger"
 	"cursortab/types"
+	"cursortab/utils"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -181,18 +182,28 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 }
 
 // buildPrompt constructs the prompt from the file content up to the cursor position
+// Uses max_context_tokens to limit context size
 func (p *Provider) buildPrompt(req *types.CompletionRequest) string {
+	if len(req.Lines) == 0 {
+		return ""
+	}
+
+	// Get trimmed content around cursor using max_context_tokens
+	cursorLine := req.CursorRow - 1 // Convert to 0-indexed
+	trimmedLines, newCursorRow, _, _ := utils.TrimContentAroundCursor(
+		req.Lines, cursorLine, req.CursorCol, p.config.MaxTokens)
+
 	var promptBuilder strings.Builder
 
-	// Add lines before the cursor
-	for i := 0; i < req.CursorRow-1; i++ {
-		promptBuilder.WriteString(req.Lines[i])
+	// Add lines before the cursor (within trimmed window)
+	for i := 0; i < newCursorRow; i++ {
+		promptBuilder.WriteString(trimmedLines[i])
 		promptBuilder.WriteString("\n")
 	}
 
 	// Add the current line up to the cursor position
-	if req.CursorRow > 0 && req.CursorRow <= len(req.Lines) {
-		currentLine := req.Lines[req.CursorRow-1]
+	if newCursorRow < len(trimmedLines) {
+		currentLine := trimmedLines[newCursorRow]
 		if req.CursorCol <= len(currentLine) {
 			promptBuilder.WriteString(currentLine[:req.CursorCol])
 		} else {

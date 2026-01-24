@@ -58,7 +58,7 @@ func NewDaemon(config Config) (*Daemon, error) {
 			AutoAdvance:   config.CursorPrediction.AutoAdvance,
 			DistThreshold: config.CursorPrediction.DistThreshold,
 		},
-		MaxDiffTokens:            config.MaxContextTokens / 2,
+		MaxDiffTokens:            config.MaxDiffHistoryTokens,
 	})
 	if err != nil {
 		return nil, err

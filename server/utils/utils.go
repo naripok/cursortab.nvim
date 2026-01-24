@@ -32,6 +32,19 @@ func EstimateCharsFromTokens(tokens int) int {
 // TrimContentAroundCursor trims the content to fit within maxTokens while preserving
 // context around the cursor position. Returns the trimmed lines, adjusted cursor position, and trim offset.
 func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int) ([]string, int, int, int) {
+	// Handle empty file
+	if len(lines) == 0 {
+		return lines, 0, cursorCol, 0
+	}
+
+	// Clamp cursor to valid range
+	if cursorRow < 0 {
+		cursorRow = 0
+	}
+	if cursorRow >= len(lines) {
+		cursorRow = len(lines) - 1
+	}
+
 	if maxTokens <= 0 {
 		return lines, cursorRow, cursorCol, 0
 	}
