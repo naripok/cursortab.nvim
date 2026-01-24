@@ -9,7 +9,7 @@ supports custom models and models form Zeta (Zed) and SweepAI.
 > and breaking changes.
 
 <p align="center">
-    <img src="assets/preview.png" width=512></img>
+    <img src="assets/demo.gif" width="600">
 </p>
 
 ## Installation
