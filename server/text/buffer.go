@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/neovim/go-client/nvim"
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 type BufferConfig struct {
@@ -316,11 +317,67 @@ func applyVisualGroupsToDiffResult(diffResult *DiffResult, visualGroups []*types
 	}
 }
 
+// extractGranularDiffs analyzes old and new lines and returns DiffEntry records
+// for each contiguous region that changed. This avoids storing unchanged context
+// when a provider (like sweep) replaces a large window but only modifies a few lines.
+func extractGranularDiffs(oldLines, newLines []string) []*types.DiffEntry {
+	oldText := strings.Join(oldLines, "\n")
+	newText := strings.Join(newLines, "\n")
+
+	if oldText == newText {
+		return nil
+	}
+
+	dmp := diffmatchpatch.New()
+	chars1, chars2, lineArray := dmp.DiffLinesToChars(oldText, newText)
+	diffs := dmp.DiffMain(chars1, chars2, false)
+	lineDiffs := dmp.DiffCharsToLines(diffs, lineArray)
+
+	var entries []*types.DiffEntry
+
+	for i := 0; i < len(lineDiffs); i++ {
+		diff := lineDiffs[i]
+
+		switch diff.Type {
+		case diffmatchpatch.DiffEqual:
+			// No change, skip
+			continue
+
+		case diffmatchpatch.DiffDelete:
+			// Get the deleted content (trim trailing newline from diff output)
+			deletedText := strings.TrimSuffix(diff.Text, "\n")
+			insertedText := ""
+
+			// Check if followed by an insert (modification pattern)
+			if i+1 < len(lineDiffs) && lineDiffs[i+1].Type == diffmatchpatch.DiffInsert {
+				insertedText = strings.TrimSuffix(lineDiffs[i+1].Text, "\n")
+				i++ // Skip the insert in next iteration
+			}
+
+			entries = append(entries, &types.DiffEntry{
+				Original: deletedText,
+				Updated:  insertedText,
+			})
+
+		case diffmatchpatch.DiffInsert:
+			// Pure insertion (no preceding delete)
+			insertedText := strings.TrimSuffix(diff.Text, "\n")
+			entries = append(entries, &types.DiffEntry{
+				Original: "",
+				Updated:  insertedText,
+			})
+		}
+	}
+
+	return entries
+}
+
 // CommitPendingEdit applies the pending edit to buffer state, increments version,
-// and appends a structured diff entry showing before/after content. No-op if no pending edit.
+// and appends structured diff entries showing before/after content. No-op if no pending edit.
 //
-// Records only the affected line range in the diff history (not the entire file),
-// matching the format expected by the sweep model.
+// Uses granular diff extraction to create separate DiffEntry records for each
+// contiguous changed region, rather than one large entry for the entire replaced range.
+// This ensures diff history accurately reflects what actually changed.
 func (b *Buffer) CommitPendingEdit() {
 	if !b.hasPending {
 		return
@@ -336,18 +393,9 @@ func (b *Buffer) CommitPendingEdit() {
 		originalRangeLines = append(originalRangeLines, b.originalLines[i-1])
 	}
 
-	// Create diff entry with only the affected content (not the entire file)
-	originalContent := strings.Join(originalRangeLines, "\n")
-	updatedContent := strings.Join(lines, "\n")
-
-	// Only record diff if there's an actual change
-	if originalContent != updatedContent {
-		diffEntry := &types.DiffEntry{
-			Original: originalContent,
-			Updated:  updatedContent,
-		}
-		b.DiffHistories = append(b.DiffHistories, diffEntry)
-	}
+	// Extract granular diffs - one DiffEntry per contiguous changed region
+	diffEntries := extractGranularDiffs(originalRangeLines, lines)
+	b.DiffHistories = append(b.DiffHistories, diffEntries...)
 
 	// Compute the final buffer state after applying the completion
 	newLines := make([]string, 0, len(b.Lines)-((endLineInclusive-startLine)+1)+len(lines))
