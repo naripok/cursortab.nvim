@@ -190,13 +190,13 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) string {
 
 	// Get trimmed content around cursor using max_context_tokens
 	cursorLine := req.CursorRow - 1 // Convert to 0-indexed
-	trimmedLines, newCursorRow, _, _ := utils.TrimContentAroundCursor(
+	trimmedLines, newCursorRow, _, _, _ := utils.TrimContentAroundCursor(
 		req.Lines, cursorLine, req.CursorCol, p.config.MaxTokens)
 
 	var promptBuilder strings.Builder
 
 	// Add lines before the cursor (within trimmed window)
-	for i := 0; i < newCursorRow; i++ {
+	for i := range newCursorRow {
 		promptBuilder.WriteString(trimmedLines[i])
 		promptBuilder.WriteString("\n")
 	}

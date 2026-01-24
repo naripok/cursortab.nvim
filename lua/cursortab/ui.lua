@@ -532,44 +532,49 @@ local function show_completion(diff_result)
 
 				addition_offset = addition_offset + 1
 			elseif line_diff.type == "modification_group" then
-				-- Handle grouped consecutive modifications
+				-- Handle grouped consecutive modifications as inline replacements
+				-- Each line in the group gets an overlay covering the original content
 				local syntax_ft = vim.api.nvim_get_option_value("filetype", { buf = current_buf })
 
-				-- Highlight existing lines with red background for the entire group range
-				for line_num = line_diff.startLine, line_diff.endLine do
-					-- Convert relative line number to absolute buffer line number, then to 0-based
-					absolute_line_num = (diff_result.startLine or 1) + line_num - 1
-					local highlight_line = absolute_line_num - 1 -- Convert to 0-based for nvim API
-					local line_content = vim.api.nvim_buf_get_lines(
-						current_buf,
-						highlight_line,
-						highlight_line + 1,
-						false
-					)[1] or ""
-
-					if line_content ~= "" then
-						local extmark_id =
-							vim.api.nvim_buf_set_extmark(current_buf, daemon.get_namespace_id(), highlight_line, 0, {
-								end_col = #line_content,
-								hl_group = "cursortabhl_deletion",
-								hl_mode = "combine",
-							})
-						table.insert(completion_extmarks, { buf = current_buf, extmark_id = extmark_id })
-					end
-				end
-
-				-- Create a single overlay window for the entire group positioned using MaxOffset
 				if line_diff.groupLines and #line_diff.groupLines > 0 then
-					local overlay_win, overlay_buf, _ = create_overlay_window(
-						current_win,
-						nvim_line,
-						(line_diff.maxOffset or 0) + 2,
-						line_diff.groupLines,
-						syntax_ft,
-						"cursortabhl_modification",
-						nil
-					)
-					table.insert(completion_windows, { win_id = overlay_win, buf_id = overlay_buf })
+					for i, new_line_content in ipairs(line_diff.groupLines) do
+						-- Calculate the absolute line number for this line in the group
+						local group_line_num = line_diff.startLine + i - 1
+						local abs_line_num = (diff_result.startLine or 1) + group_line_num - 1
+						local line_nvim = abs_line_num - 1 -- Convert to 0-based for nvim API
+
+						-- Get original line content and width
+						local original_content =
+							vim.api.nvim_buf_get_lines(current_buf, line_nvim, line_nvim + 1, false)[1] or ""
+						local original_width = vim.fn.strdisplaywidth(original_content)
+
+						-- Create overlay window covering the entire line
+						if new_line_content and new_line_content ~= "" then
+							local overlay_win, overlay_buf, _ = create_overlay_window(
+								current_win,
+								line_nvim,
+								0,
+								new_line_content,
+								syntax_ft,
+								nil,
+								original_width
+							)
+							table.insert(completion_windows, { win_id = overlay_win, buf_id = overlay_buf })
+						elseif original_content ~= "" then
+							-- New content is empty but original has content - show deletion indicator
+							-- Create an overlay that covers the original with a deletion marker
+							local overlay_win, overlay_buf, _ = create_overlay_window(
+								current_win,
+								line_nvim,
+								0,
+								string.rep(" ", original_width),
+								nil,
+								"cursortabhl_deletion",
+								original_width
+							)
+							table.insert(completion_windows, { win_id = overlay_win, buf_id = overlay_buf })
+						end
+					end
 				end
 			elseif line_diff.type == "addition_group" then
 				-- Handle grouped consecutive additions

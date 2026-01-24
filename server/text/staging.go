@@ -6,25 +6,91 @@ import (
 	"strings"
 )
 
-// ChangeCluster represents a group of nearby changes (within threshold lines)
-type ChangeCluster struct {
-	StartLine int             // First line with changes (1-indexed)
-	EndLine   int             // Last line with changes (1-indexed)
-	Changes   map[int]LineDiff // Map of line number to diff operation
-}
-
-// ClusterChanges groups nearby changes (within threshold lines) into clusters
-func ClusterChanges(diff *DiffResult, threshold int) []*ChangeCluster {
+// CreateStages is the main entry point for creating stages from a diff result.
+// It handles viewport partitioning, proximity grouping, and cursor distance sorting.
+// Returns nil if no staging is needed (single stage or no changes).
+//
+// Parameters:
+//   - diff: The diff result (can be grouped or ungrouped - this function handles both)
+//   - cursorRow: Current cursor position (1-indexed buffer coordinate)
+//   - viewportTop, viewportBottom: Visible viewport (1-indexed buffer coordinates)
+//   - baseLineOffset: Where the diff range starts in the buffer (1-indexed)
+//   - proximityThreshold: Max gap between changes to be in same stage
+//   - filePath: File path for cursor targets
+//   - newLines: New content lines for extracting stage content
+//
+// Returns stages sorted by cursor distance, or nil if ≤1 stage needed.
+func CreateStages(
+	diff *DiffResult,
+	cursorRow int,
+	viewportTop, viewportBottom int,
+	baseLineOffset int,
+	proximityThreshold int,
+	filePath string,
+	newLines []string,
+) []*types.CompletionStage {
 	if len(diff.Changes) == 0 {
 		return nil
 	}
 
-	// Get sorted line numbers
-	var lineNumbers []int
-	for lineNum := range diff.Changes {
-		lineNumbers = append(lineNumbers, lineNum)
+	// Step 1: Partition changes by viewport visibility
+	var inViewChanges, outViewChanges []int // line numbers
+	for lineNum, change := range diff.Changes {
+		bufferLine := lineNum + baseLineOffset - 1
+		endBufferLine := bufferLine
+
+		// For group types (if diff is already grouped), use EndLine
+		if change.Type == LineModificationGroup || change.Type == LineAdditionGroup {
+			endBufferLine = change.EndLine + baseLineOffset - 1
+		}
+
+		// A change is visible if its entire range is within viewport
+		isVisible := viewportTop == 0 && viewportBottom == 0 || // No viewport info = all visible
+			(bufferLine >= viewportTop && endBufferLine <= viewportBottom)
+
+		if isVisible {
+			inViewChanges = append(inViewChanges, lineNum)
+		} else {
+			outViewChanges = append(outViewChanges, lineNum)
+		}
 	}
-	sort.Ints(lineNumbers)
+
+	// Sort both partitions
+	sort.Ints(inViewChanges)
+	sort.Ints(outViewChanges)
+
+	// Step 2: Group changes by proximity within each partition
+	inViewClusters := groupChangesByProximity(diff, inViewChanges, proximityThreshold)
+	outViewClusters := groupChangesByProximity(diff, outViewChanges, proximityThreshold)
+
+	// Combine: in-view first, then out-of-view
+	allClusters := append(inViewClusters, outViewClusters...)
+
+	// If only 1 cluster (or none), no staging needed
+	if len(allClusters) <= 1 {
+		return nil
+	}
+
+	// Step 3: Sort clusters by cursor distance
+	sort.SliceStable(allClusters, func(i, j int) bool {
+		distI := clusterDistanceFromCursor(allClusters[i], cursorRow, baseLineOffset)
+		distJ := clusterDistanceFromCursor(allClusters[j], cursorRow, baseLineOffset)
+		if distI != distJ {
+			return distI < distJ
+		}
+		return allClusters[i].StartLine < allClusters[j].StartLine
+	})
+
+	// Step 4: Create stages from clusters
+	return buildStagesFromClusters(allClusters, newLines, filePath, baseLineOffset)
+}
+
+// groupChangesByProximity groups sorted line numbers into clusters based on proximity.
+// Changes within proximityThreshold lines of each other are grouped together.
+func groupChangesByProximity(diff *DiffResult, lineNumbers []int, proximityThreshold int) []*ChangeCluster {
+	if len(lineNumbers) == 0 {
+		return nil
+	}
 
 	var clusters []*ChangeCluster
 	var currentCluster *ChangeCluster
@@ -32,7 +98,7 @@ func ClusterChanges(diff *DiffResult, threshold int) []*ChangeCluster {
 	for _, lineNum := range lineNumbers {
 		change := diff.Changes[lineNum]
 
-		// Get the actual end line for group types
+		// Get the end line for this change
 		endLine := lineNum
 		if change.Type == LineModificationGroup || change.Type == LineAdditionGroup {
 			endLine = change.EndLine
@@ -47,9 +113,11 @@ func ClusterChanges(diff *DiffResult, threshold int) []*ChangeCluster {
 			}
 			currentCluster.Changes[lineNum] = change
 		} else {
-			// Check if this change is within threshold of the current cluster
+			// Check if this change is within threshold of current cluster
+			// Gap is the number of lines between the end of current cluster and this change
+			// e.g., lines 47 and 50 have gap = 50 - 47 = 3
 			gap := lineNum - currentCluster.EndLine
-			if gap <= threshold {
+			if gap <= proximityThreshold {
 				// Add to current cluster
 				currentCluster.Changes[lineNum] = change
 				if endLine > currentCluster.EndLine {
@@ -76,50 +144,17 @@ func ClusterChanges(diff *DiffResult, threshold int) []*ChangeCluster {
 	return clusters
 }
 
-// ShouldSplitCompletion returns true if there are gaps > threshold between changes
-func ShouldSplitCompletion(diff *DiffResult, threshold int) bool {
-	clusters := ClusterChanges(diff, threshold)
-	return len(clusters) > 1
-}
-
-// CreateStagesFromClusters builds stages sorted by cursor distance
-// Each stage contains changes for one cluster, with a cursor target pointing to the next cluster
-// baseLineOffset is the 1-indexed line number where the completion range starts in the buffer
-func CreateStagesFromClusters(
-	clusters []*ChangeCluster,
-	originalLines []string,
-	newLines []string,
-	cursorRow int,
-	filePath string,
-	baseLineOffset int,
-) []*types.CompletionStage {
-	if len(clusters) == 0 {
-		return nil
-	}
-
-	// Sort clusters by distance from cursor (closest first), with line number as tiebreaker
-	sortedClusters := make([]*ChangeCluster, len(clusters))
-	copy(sortedClusters, clusters)
-	sort.SliceStable(sortedClusters, func(i, j int) bool {
-		// Convert cluster coordinates to buffer coordinates for distance calculation
-		distI := clusterDistanceFromCursor(sortedClusters[i], cursorRow, baseLineOffset)
-		distJ := clusterDistanceFromCursor(sortedClusters[j], cursorRow, baseLineOffset)
-		if distI != distJ {
-			return distI < distJ
-		}
-		// Tiebreaker: sort by line number for deterministic ordering
-		return sortedClusters[i].StartLine < sortedClusters[j].StartLine
-	})
-
+// buildStagesFromClusters creates CompletionStages from clusters.
+func buildStagesFromClusters(clusters []*ChangeCluster, newLines []string, filePath string, baseLineOffset int) []*types.CompletionStage {
 	var stages []*types.CompletionStage
 
-	for i, cluster := range sortedClusters {
-		isLastStage := i == len(sortedClusters)-1
+	for i, cluster := range clusters {
+		isLastStage := i == len(clusters)-1
 
-		// Create completion for this cluster (with coordinate offset)
+		// Create completion for this cluster
 		completion := createCompletionFromCluster(cluster, newLines, baseLineOffset)
 
-		// Create cursor target (convert to buffer coordinates)
+		// Create cursor target
 		var cursorTarget *types.CursorPredictionTarget
 		if isLastStage {
 			// Last stage: cursor target to end of this cluster with retrigger
@@ -131,7 +166,7 @@ func CreateStagesFromClusters(
 			}
 		} else {
 			// Not last stage: cursor target to the start of the next cluster
-			nextCluster := sortedClusters[i+1]
+			nextCluster := clusters[i+1]
 			bufferStartLine := nextCluster.StartLine + baseLineOffset - 1
 			cursorTarget = &types.CursorPredictionTarget{
 				RelativePath:    filePath,
@@ -140,14 +175,33 @@ func CreateStagesFromClusters(
 			}
 		}
 
+		// Compute visual groups for this cluster's changes
+		// Build oldLinesForCluster aligned with newLines indices (not cluster line range)
+		// This ensures computeVisualGroups receives correctly aligned data
+		oldLinesForCluster := make([]string, len(newLines))
+		for lineNum, change := range cluster.Changes {
+			if lineNum-1 >= 0 && lineNum-1 < len(oldLinesForCluster) {
+				oldLinesForCluster[lineNum-1] = change.OldContent
+			}
+		}
+		visualGroups := computeVisualGroups(cluster.Changes, newLines, oldLinesForCluster)
+
 		stages = append(stages, &types.CompletionStage{
 			Completion:   completion,
 			CursorTarget: cursorTarget,
 			IsLastStage:  isLastStage,
+			VisualGroups: visualGroups,
 		})
 	}
 
 	return stages
+}
+
+// ChangeCluster represents a group of nearby changes (within threshold lines)
+type ChangeCluster struct {
+	StartLine int             // First line with changes (1-indexed)
+	EndLine   int             // Last line with changes (1-indexed)
+	Changes   map[int]LineDiff // Map of line number to diff operation
 }
 
 // clusterDistanceFromCursor calculates the minimum distance from cursor to a cluster
@@ -198,14 +252,85 @@ func createCompletionFromCluster(cluster *ChangeCluster, newLines []string, base
 	}
 }
 
-// AnalyzeDiffForStaging analyzes the diff between original and new text
-// and returns the DiffResult. This is a wrapper for analyzeDiff that's exported
-// for use by the staging logic.
-func AnalyzeDiffForStaging(originalText, newText string) *DiffResult {
-	return analyzeDiff(originalText, newText)
+// AnalyzeDiffForStagingWithViewport analyzes the diff with viewport-aware grouping
+// viewportTop and viewportBottom are 1-indexed buffer line numbers
+// baseLineOffset is the 1-indexed line number where the diff range starts in the buffer
+func AnalyzeDiffForStagingWithViewport(originalText, newText string, viewportTop, viewportBottom, baseLineOffset int) *DiffResult {
+	return analyzeDiffWithViewport(originalText, newText, viewportTop, viewportBottom, baseLineOffset)
 }
 
 // JoinLines joins a slice of strings with newlines
 func JoinLines(lines []string) string {
 	return strings.Join(lines, "\n")
+}
+
+// computeVisualGroups groups consecutive changes of the same type for UI rendering alignment
+func computeVisualGroups(changes map[int]LineDiff, newLines, oldLines []string) []*types.VisualGroup {
+	if len(changes) == 0 {
+		return nil
+	}
+
+	// Get sorted line numbers
+	var lineNumbers []int
+	for ln := range changes {
+		lineNumbers = append(lineNumbers, ln)
+	}
+	sort.Ints(lineNumbers)
+
+	var groups []*types.VisualGroup
+	var current *types.VisualGroup
+
+	for _, ln := range lineNumbers {
+		change := changes[ln]
+
+		// Only group modifications and additions
+		var groupType string
+		switch change.Type {
+		case LineModification, LineModificationGroup:
+			groupType = "modification"
+		case LineAddition, LineAdditionGroup:
+			groupType = "addition"
+		default:
+			// Flush and skip non-groupable changes
+			if current != nil {
+				groups = append(groups, current)
+				current = nil
+			}
+			continue
+		}
+
+		// Check if consecutive with current group of same type
+		if current != nil && current.Type == groupType && ln == current.EndLine+1 {
+			// Extend current group
+			current.EndLine = ln
+			if ln-1 < len(newLines) {
+				current.Lines = append(current.Lines, newLines[ln-1])
+			}
+			if groupType == "modification" && ln-1 < len(oldLines) {
+				current.OldLines = append(current.OldLines, oldLines[ln-1])
+			}
+		} else {
+			// Flush current, start new
+			if current != nil {
+				groups = append(groups, current)
+			}
+			current = &types.VisualGroup{
+				Type:      groupType,
+				StartLine: ln,
+				EndLine:   ln,
+			}
+			if ln-1 < len(newLines) {
+				current.Lines = []string{newLines[ln-1]}
+			}
+			if groupType == "modification" && ln-1 < len(oldLines) {
+				current.OldLines = []string{oldLines[ln-1]}
+			}
+		}
+	}
+
+	if current != nil {
+		groups = append(groups, current)
+	}
+
+	return groups
 }

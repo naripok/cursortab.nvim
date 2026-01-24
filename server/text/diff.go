@@ -2,7 +2,6 @@ package text
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -164,23 +163,21 @@ func (r *DiffResult) addModification(lineNum int, oldContent, newContent string)
 
 // analyzeDiff computes and categorizes line-level diffs between two texts
 func analyzeDiff(text1, text2 string) *DiffResult {
+	return analyzeDiffWithViewport(text1, text2, 0, 0, 0)
+}
+
+// analyzeDiffWithViewport computes line-level diffs
+func analyzeDiffWithViewport(text1, text2 string, _, _, _ int) *DiffResult {
 	result := &DiffResult{
 		Changes: make(map[int]LineDiff),
 	}
 
-	// Use line-level diff to get the basic diff operations
 	dmp := diffmatchpatch.New()
 	chars1, chars2, lineArray := dmp.DiffLinesToChars(text1, text2)
 	diffs := dmp.DiffMain(chars1, chars2, false)
 	lineDiffs := dmp.DiffCharsToLines(diffs, lineArray)
 
-	// Process the line diffs and intelligently merge delete+insert into modifications
 	processLineDiffs(lineDiffs, result)
-
-	// Apply grouping logic to consecutive modifications and additions
-	applyGrouping(result, text1)
-
-	// Process changes and calculate summary properties (after grouping)
 	processChangesSummary(result)
 
 	// Calculate optimal cursor position based on diff results
@@ -289,120 +286,6 @@ func calculateCursorPosition(result *DiffResult, newText string) {
 			result.CursorCol = len(newLines[targetLine-1])
 		}
 	}
-}
-
-// applyGrouping identifies consecutive modifications and additions and groups them
-func applyGrouping(result *DiffResult, oldText string) {
-	oldLines := strings.Split(oldText, "\n")
-
-	// Get sorted line numbers for processing
-	var lineNumbers []int
-	for lineNum := range result.Changes {
-		lineNumbers = append(lineNumbers, lineNum)
-	}
-	sort.Ints(lineNumbers)
-
-	if len(lineNumbers) == 0 {
-		return
-	}
-
-	// Find consecutive groups
-	groupedChanges := make(map[int]LineDiff)
-	i := 0
-
-	for i < len(lineNumbers) {
-		lineNum := lineNumbers[i]
-		change := result.Changes[lineNum]
-
-		// Check if this change should be grouped
-		if change.Type == LineModification || change.Type == LineAddition {
-			// Look for consecutive changes of the same type
-			groupStart := i
-			groupEnd := i
-			groupType := change.Type
-
-			// Find end of consecutive group
-			for j := i + 1; j < len(lineNumbers); j++ {
-				nextLineNum := lineNumbers[j]
-				nextChange := result.Changes[nextLineNum]
-
-				// Check if consecutive and same type
-				if nextLineNum == lineNumbers[j-1]+1 && nextChange.Type == groupType {
-					groupEnd = j
-				} else {
-					break
-				}
-			}
-
-			// If we have multiple consecutive changes, create a group
-			if groupEnd > groupStart {
-				createGroup(result, lineNumbers[groupStart:groupEnd+1], groupType, oldLines, groupedChanges)
-				i = groupEnd + 1
-			} else {
-				// Single change, keep as is
-				groupedChanges[lineNum] = change
-				i++
-			}
-		} else {
-			// Not groupable, keep as is
-			groupedChanges[lineNum] = change
-			i++
-		}
-	}
-
-	// Replace the changes with grouped changes
-	result.Changes = groupedChanges
-}
-
-// createGroup creates a group change from consecutive individual changes
-func createGroup(result *DiffResult, lineNumbers []int, groupType DiffType, oldLines []string, groupedChanges map[int]LineDiff) {
-	if len(lineNumbers) == 0 {
-		return
-	}
-
-	startLine := lineNumbers[0]
-	endLine := lineNumbers[len(lineNumbers)-1]
-
-	// Collect group content
-	var groupLines []string
-	var maxOffset int
-
-	for _, lineNum := range lineNumbers {
-		change := result.Changes[lineNum]
-		groupLines = append(groupLines, change.Content)
-
-		// For modification groups, calculate max offset based on old content
-		if groupType == LineModification {
-			if lineNum-1 < len(oldLines) {
-				lineWidth := len(oldLines[lineNum-1])
-				if lineWidth > maxOffset {
-					maxOffset = lineWidth
-				}
-			}
-		}
-	}
-
-	// Determine group type
-	var finalGroupType DiffType
-	if groupType == LineModification {
-		finalGroupType = LineModificationGroup
-	} else {
-		finalGroupType = LineAdditionGroup
-	}
-
-	// Create the group change
-	groupChange := LineDiff{
-		Type:       finalGroupType,
-		LineNumber: startLine,                      // Use first line as primary line number
-		Content:    strings.Join(groupLines, "\n"), // Join all content
-		GroupLines: groupLines,
-		StartLine:  startLine,
-		EndLine:    endLine,
-		MaxOffset:  maxOffset,
-	}
-
-	// Add the group change (using the first line number as key)
-	groupedChanges[startLine] = groupChange
 }
 
 // processLineDiffs processes line-level diffs and intelligently categorizes them

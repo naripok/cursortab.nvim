@@ -424,6 +424,39 @@ func (e *Engine) handleCursorTarget() {
 	distance := abs(int(e.cursorTarget.LineNumber) - e.buffer.Row)
 	if distance <= e.config.CursorPrediction.DistThreshold {
 		// Close enough - don't show cursor prediction
+
+		// If we have remaining staged completions, check if next stage is still close
+		if e.stagedCompletion != nil && e.stagedCompletion.CurrentIdx < len(e.stagedCompletion.Stages) {
+			nextStage := e.stagedCompletion.Stages[e.stagedCompletion.CurrentIdx]
+			stageStart := nextStage.Completion.StartLine
+			stageEnd := nextStage.Completion.EndLineInc
+
+			// Calculate distance from cursor to next stage
+			var stageDistance int
+			if e.buffer.Row < stageStart {
+				stageDistance = stageStart - e.buffer.Row
+			} else if e.buffer.Row > stageEnd {
+				stageDistance = e.buffer.Row - stageEnd
+			} else {
+				stageDistance = 0 // Cursor is within the stage range
+			}
+
+			if stageDistance <= e.config.CursorPrediction.DistThreshold {
+				// Stage is close enough - show it directly
+				e.showCurrentStage()
+				return
+			}
+			// Stage is far - show cursor prediction to it instead
+			e.cursorTarget = &types.CursorPredictionTarget{
+				RelativePath:    e.buffer.Path,
+				LineNumber:      int32(stageStart),
+				ShouldRetrigger: false,
+			}
+			e.state = stateHasCursorTarget
+			e.buffer.OnCursorPredictionReady(e.n, stageStart)
+			return
+		}
+
 		// If prefetch is ready, show completion immediately
 		if e.prefetchState == prefetchReady && e.tryShowPrefetchedCompletion() {
 			return
@@ -654,11 +687,13 @@ func (e *Engine) showCurrentStage() {
 	e.cursorTarget = stage.CursorTarget
 	e.state = stateHasCompletion
 
-	e.applyBatch = e.buffer.OnCompletionReady(
+	// Use OnCompletionReadyWithGroups with pre-computed visual groups from stage
+	e.applyBatch = e.buffer.OnCompletionReadyWithGroups(
 		e.n,
 		stage.Completion.StartLine,
 		stage.Completion.EndLineInc,
 		stage.Completion.Lines,
+		stage.VisualGroups,
 	)
 
 	// Store original buffer lines for partial typing optimization
@@ -666,6 +701,119 @@ func (e *Engine) showCurrentStage() {
 	for i := stage.Completion.StartLine; i <= stage.Completion.EndLineInc && i-1 < len(e.buffer.Lines); i++ {
 		e.completionOriginalLines = append(e.completionOriginalLines, e.buffer.Lines[i-1])
 	}
+}
+
+// processCompletion is the SINGLE ENTRY POINT for processing all completions.
+// It handles diff analysis, staging decisions, and showing completions.
+// Called from both fresh completion responses and prefetch paths.
+// Returns true if completion was processed successfully, false if no changes.
+func (e *Engine) processCompletion(completion *types.Completion, cursorTarget *types.CursorPredictionTarget) bool {
+	if e.n == nil || completion == nil {
+		return false
+	}
+
+	// Check for actual changes
+	if !e.buffer.HasChanges(completion.StartLine, completion.EndLineInc, completion.Lines) {
+		logger.Debug("processCompletion: no changes detected")
+		return false
+	}
+
+	// Extract original lines from buffer
+	var originalLines []string
+	for i := completion.StartLine; i <= completion.EndLineInc && i-1 < len(e.buffer.Lines); i++ {
+		originalLines = append(originalLines, e.buffer.Lines[i-1])
+	}
+
+	// Analyze diff with viewport awareness
+	originalText := text.JoinLines(originalLines)
+	newText := text.JoinLines(completion.Lines)
+	diffResult := text.AnalyzeDiffForStagingWithViewport(
+		originalText, newText,
+		e.buffer.ViewportTop, e.buffer.ViewportBottom,
+		completion.StartLine,
+	)
+
+	// Resolve cursor target (use provided or create auto-advance target)
+	resolvedCursorTarget := cursorTarget
+	if resolvedCursorTarget == nil && e.config.CursorPrediction.AutoAdvance && e.config.CursorPrediction.Enabled {
+		resolvedCursorTarget = &types.CursorPredictionTarget{
+			RelativePath:    e.buffer.Path,
+			LineNumber:      int32(completion.EndLineInc),
+			ShouldRetrigger: true,
+		}
+	}
+
+	// Try staging if enabled and line counts are equal (coordinate mapping requirement)
+	if e.config.CursorPrediction.Enabled && len(originalLines) == len(completion.Lines) {
+		// Use unified CreateStages which handles:
+		// - Viewport partitioning (visible changes first)
+		// - Proximity grouping (nearby changes in same stage)
+		// - Cursor distance sorting (closest stage first)
+		stages := text.CreateStages(
+			diffResult,
+			e.buffer.Row,
+			e.buffer.ViewportTop, e.buffer.ViewportBottom,
+			completion.StartLine,
+			e.config.CursorPrediction.DistThreshold,
+			e.buffer.Path,
+			completion.Lines,
+		)
+
+		if len(stages) > 0 {
+			e.stagedCompletion = &types.StagedCompletion{
+				Stages:     stages,
+				CurrentIdx: 0,
+				SourcePath: e.buffer.Path,
+			}
+
+			// Check if first stage is outside viewport - show cursor prediction instead
+			firstStage := stages[0]
+			bufferStartLine := firstStage.Completion.StartLine
+			bufferEndLine := firstStage.Completion.EndLineInc
+
+			allOutsideViewport := (e.buffer.ViewportTop > 0 && e.buffer.ViewportBottom > 0) &&
+				(bufferEndLine < e.buffer.ViewportTop || bufferStartLine > e.buffer.ViewportBottom)
+
+			// Calculate distance from cursor to first stage
+			var distance int
+			if e.buffer.Row < bufferStartLine {
+				distance = bufferStartLine - e.buffer.Row
+			} else if e.buffer.Row > bufferEndLine {
+				distance = e.buffer.Row - bufferEndLine
+			} else {
+				distance = 0 // Cursor is within the stage range
+			}
+
+			isFarFromCursor := distance > e.config.CursorPrediction.DistThreshold
+
+			if allOutsideViewport || isFarFromCursor {
+				// Show cursor prediction to first change
+				e.cursorTarget = &types.CursorPredictionTarget{
+					RelativePath:    e.buffer.Path,
+					LineNumber:      int32(bufferStartLine),
+					ShouldRetrigger: false,
+				}
+				e.state = stateHasCursorTarget
+				e.buffer.OnCursorPredictionReady(e.n, bufferStartLine)
+				return true
+			}
+
+			// Show first stage
+			e.showCurrentStage()
+			return true
+		}
+	}
+
+	// No staging - show as single completion
+	e.state = stateHasCompletion
+	e.completions = []*types.Completion{completion}
+	e.cursorTarget = resolvedCursorTarget
+	e.applyBatch = e.buffer.OnCompletionReady(e.n, completion.StartLine, completion.EndLineInc, completion.Lines)
+
+	// Store original buffer lines for partial typing optimization
+	e.completionOriginalLines = originalLines
+
+	return true
 }
 
 // SetNvim sets a new nvim instance for the engine (used for socket connections)

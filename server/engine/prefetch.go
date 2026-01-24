@@ -38,22 +38,6 @@ func (s prefetchState) String() string {
 	}
 }
 
-// resolveCursorTarget returns the appropriate cursor target for a completion.
-// Uses prefetchedCursorTarget if available, otherwise creates one with auto_advance if enabled.
-func (e *Engine) resolveCursorTarget(endLineInc int) *types.CursorPredictionTarget {
-	if e.prefetchedCursorTarget != nil {
-		return e.prefetchedCursorTarget
-	}
-	if e.config.CursorPrediction.AutoAdvance && e.config.CursorPrediction.Enabled {
-		return &types.CursorPredictionTarget{
-			RelativePath:    e.buffer.Path,
-			LineNumber:      int32(endLineInc),
-			ShouldRetrigger: true,
-		}
-	}
-	return nil
-}
-
 // requestPrefetch requests a completion for a specific cursor position without changing the engine state
 func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int, overrideCol int) {
 	if e.stopped || e.n == nil {
@@ -165,25 +149,19 @@ func (e *Engine) tryShowPrefetchedCompletion() bool {
 		return false
 	}
 
+	// Sync buffer to get current cursor position
+	e.buffer.SyncIn(e.n, e.WorkspacePath)
+
 	comp := e.prefetchedCompletions[0]
+	cursorTarget := e.prefetchedCursorTarget
 
-	// Check if there are actual changes before transitioning to HasCompletion state
-	if !e.buffer.HasChanges(comp.StartLine, comp.EndLineInc, comp.Lines) {
-		logger.Debug("no changes to completion (prefetched tryShow)")
-		e.prefetchedCompletions = nil
-		e.prefetchedCursorTarget = nil
-		e.prefetchState = prefetchNone
-		return false
-	}
-
-	e.state = stateHasCompletion
-	e.completions = e.prefetchedCompletions
-	e.cursorTarget = e.resolveCursorTarget(comp.EndLineInc)
+	// Clear prefetch state before processing
 	e.prefetchedCompletions = nil
 	e.prefetchedCursorTarget = nil
 	e.prefetchState = prefetchNone
-	e.applyBatch = e.buffer.OnCompletionReady(e.n, comp.StartLine, comp.EndLineInc, comp.Lines)
-	return true
+
+	// Use unified processCompletion for all completion handling (including staging)
+	return e.processCompletion(comp, cursorTarget)
 }
 
 // handlePrefetchError processes a prefetch error
@@ -215,20 +193,22 @@ func (e *Engine) handleDeferredCursorTarget() {
 		// Sync buffer to get updated cursor position
 		e.buffer.SyncIn(e.n, e.WorkspacePath)
 
-		e.state = stateHasCompletion
-		e.completions = e.prefetchedCompletions
-		e.cursorTarget = e.resolveCursorTarget(e.completions[0].EndLineInc)
+		comp := e.prefetchedCompletions[0]
+		cursorTarget := e.prefetchedCursorTarget
+
+		// Clear prefetch state before processing
 		e.prefetchedCompletions = nil
 		e.prefetchedCursorTarget = nil
 		e.prefetchState = prefetchNone
 
-		if e.buffer.HasChanges(e.completions[0].StartLine, e.completions[0].EndLineInc, e.completions[0].Lines) {
-			e.applyBatch = e.buffer.OnCompletionReady(e.n, e.completions[0].StartLine, e.completions[0].EndLineInc, e.completions[0].Lines)
-		} else {
-			logger.Debug("no changes to completion (deferred prefetched)")
-			e.handleCursorTarget()
+		// Use unified processCompletion for all completion handling (including staging)
+		if e.processCompletion(comp, cursorTarget) {
+			return
 		}
 
+		// No changes
+		logger.Debug("no changes to completion (deferred prefetched)")
+		e.handleCursorTarget()
 		return
 	}
 
@@ -254,19 +234,21 @@ func (e *Engine) usePrefetchedCompletion() bool {
 	// Sync buffer to get updated cursor position after move
 	e.buffer.SyncIn(e.n, e.WorkspacePath)
 
-	e.state = stateHasCompletion
-	e.completions = e.prefetchedCompletions
-	e.cursorTarget = e.resolveCursorTarget(e.completions[0].EndLineInc)
+	comp := e.prefetchedCompletions[0]
+	cursorTarget := e.prefetchedCursorTarget
+
+	// Clear prefetch state before processing
 	e.prefetchedCompletions = nil
 	e.prefetchedCursorTarget = nil
 	e.prefetchState = prefetchNone
 
-	if e.buffer.HasChanges(e.completions[0].StartLine, e.completions[0].EndLineInc, e.completions[0].Lines) {
-		e.applyBatch = e.buffer.OnCompletionReady(e.n, e.completions[0].StartLine, e.completions[0].EndLineInc, e.completions[0].Lines)
-	} else {
-		logger.Debug("no changes to completion (prefetched)")
-		e.handleCursorTarget()
+	// Use unified processCompletion for all completion handling (including staging)
+	if e.processCompletion(comp, cursorTarget) {
+		return true
 	}
 
+	// No changes - handle cursor target
+	logger.Debug("no changes to completion (prefetched)")
+	e.handleCursorTarget()
 	return true
 }

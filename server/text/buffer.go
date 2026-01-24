@@ -29,6 +29,10 @@ type Buffer struct {
 	id               nvim.Buffer
 	scrollOffsetX    int // Horizontal scroll offset (leftcol)
 
+	// Viewport bounds (1-indexed line numbers)
+	ViewportTop    int // First visible line (1-indexed)
+	ViewportBottom int // Last visible line (1-indexed)
+
 	config BufferConfig
 
 	// Pending completion state (committed only on accept)
@@ -98,6 +102,7 @@ func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
 	var window nvim.Window
 	var cursor [2]int
 	var scrollOffset int
+	var viewportBounds [2]int
 
 	batch.CurrentBuffer(&currentBuf)
 	batch.BufferName(nvim.Buffer(0), &path) // Use 0 for current buffer
@@ -110,6 +115,11 @@ func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
 		local view = vim.fn.winsaveview()
 		return view.leftcol or 0
 	`, &scrollOffset, nil)
+
+	// Get vertical viewport bounds (first and last visible line numbers, 1-indexed)
+	batch.ExecLua(`
+		return {vim.fn.line("w0"), vim.fn.line("w$")}
+	`, &viewportBounds, nil)
 
 	if err := batch.Execute(); err != nil {
 		logger.Error("error executing sync batch: %v", err)
@@ -126,6 +136,10 @@ func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
 	b.Row = cursor[0]              // Line (vertical position, 1-based in nvim cursor)
 	b.Col = cursor[1]              // Column (horizontal position, 0-based in nvim cursor)
 	b.scrollOffsetX = scrollOffset // Horizontal scroll offset
+
+	// Update viewport bounds (1-indexed)
+	b.ViewportTop = viewportBounds[0]
+	b.ViewportBottom = viewportBounds[1]
 
 	// Convert absolute path to relative workspace path
 	relativePath := makeRelativeToWorkspace(path, workspacePath)
@@ -205,8 +219,30 @@ func (b *Buffer) getApplyBatch(n *nvim.Nvim, startLine, endLineInclusive int, li
 }
 
 func (b *Buffer) OnCompletionReady(n *nvim.Nvim, startLine, endLineInclusive int, lines []string) *nvim.Batch {
+	return b.OnCompletionReadyWithGroups(n, startLine, endLineInclusive, lines, nil)
+}
+
+// OnCompletionReadyWithGroups shows a completion with optional pre-computed visual groups
+func (b *Buffer) OnCompletionReadyWithGroups(n *nvim.Nvim, startLine, endLineInclusive int, lines []string, visualGroups []*types.VisualGroup) *nvim.Batch {
 	diffResult := b.getDiffResult(startLine, endLineInclusive, lines)
 	applyBatch := b.getApplyBatch(n, startLine, endLineInclusive, lines, diffResult)
+
+	// If no visual groups provided, compute them from the diff
+	if visualGroups == nil && len(diffResult.Changes) > 0 {
+		// Extract original lines for modification comparison
+		var originalLines []string
+		for i := startLine; i <= endLineInclusive && i-1 < len(b.Lines); i++ {
+			originalLines = append(originalLines, b.Lines[i-1])
+		}
+		visualGroups = computeVisualGroups(diffResult.Changes, lines, originalLines)
+	}
+
+	// Transform visual groups into grouped LineDiff entries
+	// This converts consecutive changes into modification_group/addition_group types
+	// that Lua already knows how to render
+	if len(visualGroups) > 0 {
+		applyVisualGroupsToDiffResult(diffResult, visualGroups, lines)
+	}
 
 	// Convert diffResult to Lua format with additional context fields
 	luaDiffResult := diffResult.ToLuaFormat(
@@ -223,6 +259,61 @@ func (b *Buffer) OnCompletionReady(n *nvim.Nvim, startLine, endLineInclusive int
 	b.executeLuaFunction(n, "require('cursortab').on_completion_ready(...)", luaDiffResult)
 
 	return applyBatch
+}
+
+// applyVisualGroupsToDiffResult transforms visual groups into grouped LineDiff entries
+// Multi-line groups become modification_group/addition_group, single-line changes stay as-is
+func applyVisualGroupsToDiffResult(diffResult *DiffResult, visualGroups []*types.VisualGroup, newLines []string) {
+	for _, vg := range visualGroups {
+		// Only group multi-line changes
+		if vg.EndLine <= vg.StartLine {
+			continue
+		}
+
+		// Determine the group type
+		var groupType DiffType
+		if vg.Type == "modification" {
+			groupType = LineModificationGroup
+		} else if vg.Type == "addition" {
+			groupType = LineAdditionGroup
+		} else {
+			continue
+		}
+
+		// Collect the lines for this group
+		var groupLines []string
+		for lineNum := vg.StartLine; lineNum <= vg.EndLine; lineNum++ {
+			if lineNum-1 < len(newLines) {
+				groupLines = append(groupLines, newLines[lineNum-1])
+			}
+		}
+
+		// Calculate max offset for modification groups (max width of old lines)
+		maxOffset := 0
+		if groupType == LineModificationGroup {
+			for _, oldLine := range vg.OldLines {
+				if len(oldLine) > maxOffset {
+					maxOffset = len(oldLine)
+				}
+			}
+		}
+
+		// Remove individual entries that are now part of the group
+		for lineNum := vg.StartLine; lineNum <= vg.EndLine; lineNum++ {
+			delete(diffResult.Changes, lineNum)
+		}
+
+		// Add the grouped entry at the start line
+		diffResult.Changes[vg.StartLine] = LineDiff{
+			Type:       groupType,
+			LineNumber: vg.StartLine,
+			Content:    "", // Not used for groups
+			GroupLines: groupLines,
+			StartLine:  vg.StartLine,
+			EndLine:    vg.EndLine,
+			MaxOffset:  maxOffset,
+		}
+	}
 }
 
 // CommitPendingEdit applies the pending edit to buffer state, increments version,

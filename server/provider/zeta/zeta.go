@@ -37,8 +37,8 @@ func NewProvider(config *types.ProviderConfig) (*Provider, error) {
 // This provider supports multi-line completions using special tokens
 // Uses streaming to enable early cancellation when enough lines are received
 func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error) {
-	// Build the user excerpt with special tokens
-	userExcerpt, editableStart, editableEnd := p.buildPromptWithSpecialTokens(req)
+	// Build the user excerpt with special tokens (also returns maxLines for streaming)
+	userExcerpt, editableStart, editableEnd, maxLines := p.buildPromptWithSpecialTokens(req)
 
 	// Build the user edits from diff history
 	userEdits := p.buildUserEditsFromDiffHistory(req)
@@ -49,9 +49,6 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	// Build the full prompt with instruction template
 	// Extended format includes diagnostics section
 	prompt := p.buildInstructionPrompt(userEdits, diagnosticsText, userExcerpt)
-
-	// Calculate max lines to receive (editable region size)
-	maxLines := editableEnd - editableStart
 
 	// Create the completion request
 	// Zeta regenerates the editable region, so max_tokens must match max_context_tokens
@@ -266,15 +263,16 @@ func (p *Provider) buildInstructionPrompt(userEdits, diagnostics, userExcerpt st
 
 // buildPromptWithSpecialTokens constructs the prompt with special tokens matching Zed's format
 // Uses max_context_tokens to limit the editable region size
-// Returns: (prompt, editableStart, editableEnd) where bounds are 0-indexed line numbers
-func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) (string, int, int) {
+// Returns: (prompt, editableStart, editableEnd, maxLines) where bounds are 0-indexed line numbers.
+// maxLines is 0 if no trimming occurred (no limit needed), otherwise it's the editable region size.
+func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) (string, int, int, int) {
 	var promptBuilder strings.Builder
 
 	if len(req.Lines) == 0 {
 		promptBuilder.WriteString("```")
 		promptBuilder.WriteString(req.FilePath)
 		promptBuilder.WriteString("\n<|start_of_file|>\n<|editable_region_start|>\n<|user_cursor_is_here|>\n<|editable_region_end|>\n```")
-		return promptBuilder.String(), 0, 0
+		return promptBuilder.String(), 0, 0, 0
 	}
 
 	cursorRow := req.CursorRow // 1-indexed
@@ -284,12 +282,20 @@ func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) (s
 	cursorLine := cursorRow - 1
 
 	// Use token-based trimming for editable region
-	trimmedLines, _, _, trimOffset := utils.TrimContentAroundCursor(
+	trimmedLines, _, _, trimOffset, didTrim := utils.TrimContentAroundCursor(
 		req.Lines, cursorLine, cursorCol, p.config.MaxTokens)
 
 	// Calculate editable region bounds from trim result
 	editableStart := trimOffset
 	editableEnd := trimOffset + len(trimmedLines)
+
+	// Calculate max lines for streaming limit:
+	// - If trimming occurred, limit to editable region size (content beyond lacks context)
+	// - If no trimming, no limit (model has full context, will stop at stop tokens)
+	maxLines := 0
+	if didTrim {
+		maxLines = len(trimmedLines)
+	}
 
 	// Context region: additional 5 lines around editable region
 	contextLinesBefore := 5
@@ -359,7 +365,7 @@ func (p *Provider) buildPromptWithSpecialTokens(req *types.CompletionRequest) (s
 	// Close the code fence (newline before the closing ```)
 	promptBuilder.WriteString("\n```")
 
-	return promptBuilder.String(), editableStart, editableEnd
+	return promptBuilder.String(), editableStart, editableEnd, maxLines
 }
 
 // parseCompletion parses the model's completion text matching Zed's parsing logic

@@ -29,6 +29,16 @@ type CompletionStage struct {
 	Completion   *Completion
 	CursorTarget *CursorPredictionTarget
 	IsLastStage  bool
+	VisualGroups []*VisualGroup // Visual groups for UI alignment
+}
+
+// VisualGroup represents consecutive changes for UI alignment
+type VisualGroup struct {
+	Type      string   `json:"type"`      // "modification" or "addition"
+	StartLine int      `json:"startLine"` // 1-indexed relative to diff
+	EndLine   int      `json:"endLine"`
+	Lines     []string `json:"lines"`     // New content
+	OldLines  []string `json:"oldLines"`  // Old content (for modifications)
 }
 
 // StagedCompletion holds the queue of pending stages

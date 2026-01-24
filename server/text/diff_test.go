@@ -563,10 +563,10 @@ func TestNoChanges(t *testing.T) {
 	assertDiffResultEqual(t, expected, actual)
 }
 
-func TestConsecutiveModificationGrouping(t *testing.T) {
+func TestConsecutiveModifications(t *testing.T) {
 	text1 := `function test() {
     start middle end
-    start middle end  
+    start middle end
     start middle end
 }`
 
@@ -578,38 +578,42 @@ func TestConsecutiveModificationGrouping(t *testing.T) {
 
 	actual := analyzeDiff(text1, text2)
 
-	// Should create a modification group for consecutive modifications
 	expected := &DiffResult{
 		Changes: map[int]LineDiff{
 			2: {
-				Type:       LineModificationGroup,
+				Type:       LineModification,
 				LineNumber: 2,
-				Content:    "    beginning middle finish extra\n    beginning middle finish extra\n    beginning middle finish extra",
-				GroupLines: []string{
-					"    beginning middle finish extra",
-					"    beginning middle finish extra",
-					"    beginning middle finish extra",
-				},
-				StartLine: 2,
-				EndLine:   4,
-				MaxOffset: 20, // Width of "    start middle end"
+				Content:    "    beginning middle finish extra",
+				OldContent: "    start middle end",
+			},
+			3: {
+				Type:       LineModification,
+				LineNumber: 3,
+				Content:    "    beginning middle finish extra",
+				OldContent: "    start middle end",
+			},
+			4: {
+				Type:       LineModification,
+				LineNumber: 4,
+				Content:    "    beginning middle finish extra",
+				OldContent: "    start middle end",
 			},
 		},
 		IsOnlyLineDeletion:   false,
 		LastDeletion:         -1,
 		LastAddition:         -1,
-		LastLineModification: 2, // Uses the first line of the group
+		LastLineModification: 4, // Last modification line
 		LastAppendChars:      -1,
 		LastDeleteChars:      -1,
 		LastReplaceChars:     -1,
-		CursorLine:           4,  // End of the group
+		CursorLine:           4,  // Last modification
 		CursorCol:            33, // End of "    beginning middle finish extra"
 	}
 
 	assertDiffResultEqual(t, expected, actual)
 }
 
-func TestConsecutiveAdditionGrouping(t *testing.T) {
+func TestConsecutiveAdditions(t *testing.T) {
 	text1 := `function test() {
     return true;
 }`
@@ -623,27 +627,32 @@ func TestConsecutiveAdditionGrouping(t *testing.T) {
 
 	actual := analyzeDiff(text1, text2)
 
-	// Should create an addition group for consecutive additions
 	expected := &DiffResult{
 		Changes: map[int]LineDiff{
 			2: {
-				Type:       LineAdditionGroup,
+				Type:       LineAddition,
 				LineNumber: 2,
-				Content:    "    let x = 1;\n    let y = 2;\n    let z = 3;",
-				GroupLines: []string{"    let x = 1;", "    let y = 2;", "    let z = 3;"},
-				StartLine:  2,
-				EndLine:    4,
-				MaxOffset:  0, // No offset for addition groups
+				Content:    "    let x = 1;",
+			},
+			3: {
+				Type:       LineAddition,
+				LineNumber: 3,
+				Content:    "    let y = 2;",
+			},
+			4: {
+				Type:       LineAddition,
+				LineNumber: 4,
+				Content:    "    let z = 3;",
 			},
 		},
 		IsOnlyLineDeletion:   false,
 		LastDeletion:         -1,
-		LastAddition:         2, // Uses the first line of the group
+		LastAddition:         4, // Last addition line
 		LastLineModification: -1,
 		LastAppendChars:      -1,
 		LastDeleteChars:      -1,
 		LastReplaceChars:     -1,
-		CursorLine:           4,  // End of the group
+		CursorLine:           4,  // Last addition
 		CursorCol:            14, // End of "    let z = 3;"
 	}
 

@@ -30,11 +30,12 @@ func EstimateCharsFromTokens(tokens int) int {
 }
 
 // TrimContentAroundCursor trims the content to fit within maxTokens while preserving
-// context around the cursor position. Returns the trimmed lines, adjusted cursor position, and trim offset.
-func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int) ([]string, int, int, int) {
+// context around the cursor position. Returns the trimmed lines, adjusted cursor position,
+// trim offset, and whether trimming occurred.
+func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int) ([]string, int, int, int, bool) {
 	// Handle empty file
 	if len(lines) == 0 {
-		return lines, 0, cursorCol, 0
+		return lines, 0, cursorCol, 0, false
 	}
 
 	// Clamp cursor to valid range
@@ -46,7 +47,7 @@ func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int
 	}
 
 	if maxTokens <= 0 {
-		return lines, cursorRow, cursorCol, 0
+		return lines, cursorRow, cursorCol, 0, false
 	}
 
 	maxChars := EstimateCharsFromTokens(maxTokens)
@@ -59,7 +60,7 @@ func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int
 
 	// If content is already within limits, return as-is
 	if totalChars <= maxChars {
-		return lines, cursorRow, cursorCol, 0
+		return lines, cursorRow, cursorCol, 0, false
 	}
 
 	// Balanced approach: allocate half budget before cursor, half after
@@ -120,7 +121,7 @@ func TrimContentAroundCursor(lines []string, cursorRow, cursorCol, maxTokens int
 	// Return trim offset (how many lines were removed from the start)
 	trimOffset := startLine
 
-	return trimmedLines, newCursorRow, cursorCol, trimOffset
+	return trimmedLines, newCursorRow, cursorCol, trimOffset, true
 }
 
 // DiffEntry interface for token limiting - matches types.DiffEntry
@@ -157,10 +158,10 @@ func TrimDiffEntries[T DiffEntry](diffs []T, maxTokens int) []T {
 	return diffs
 }
 
-// findAnchorLine searches for the best matching line in oldLines for the given needle.
+// FindAnchorLine searches for the best matching line in oldLines for the given needle.
 // Searches in a window around expectedPos to handle structural changes (adds/removes).
 // Returns the index in oldLines or -1 if no good match found.
-func findAnchorLine(needle string, oldLines []string, expectedPos int) int {
+func FindAnchorLine(needle string, oldLines []string, expectedPos int) int {
 	if len(oldLines) == 0 {
 		return -1
 	}
@@ -175,6 +176,28 @@ func findAnchorLine(needle string, oldLines []string, expectedPos int) int {
 
 	for i := searchStart; i < searchEnd; i++ {
 		similarity := text.LineSimilarity(needle, oldLines[i])
+		if similarity > bestSimilarity {
+			bestSimilarity = similarity
+			bestIdx = i
+		}
+	}
+
+	return bestIdx
+}
+
+// FindAnchorLineFullSearch searches the entire oldLines array for the best matching line.
+// Used for validation to detect if model output is misaligned with expected window.
+// Returns the index in oldLines or -1 if no good match found.
+func FindAnchorLineFullSearch(needle string, oldLines []string) int {
+	if len(oldLines) == 0 {
+		return -1
+	}
+
+	bestIdx := -1
+	bestSimilarity := 0.7 // Similarity threshold
+
+	for i, line := range oldLines {
+		similarity := text.LineSimilarity(needle, line)
 		if similarity > bestSimilarity {
 			bestSimilarity = similarity
 			bestIdx = i
@@ -241,7 +264,7 @@ func HandleTruncatedCompletionWithAnchor(
 		// Find where the last model line maps to in the original
 		lastModelLine := newLines[len(newLines)-1]
 		expectedPos := len(newLines) - 1
-		anchorIdx := findAnchorLine(lastModelLine, oldLines, expectedPos)
+		anchorIdx := FindAnchorLine(lastModelLine, oldLines, expectedPos)
 
 		if anchorIdx != -1 {
 			// Found anchor - replace from start to anchor line (inclusive)

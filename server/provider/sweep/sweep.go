@@ -38,11 +38,8 @@ func NewProvider(config *types.ProviderConfig) (*Provider, error) {
 // Uses the Sweep Next-Edit format with <|file_sep|> tokens
 // Uses streaming to enable early cancellation when enough lines are received
 func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error) {
-	// Build the prompt in Sweep's format (also returns window bounds for parseCompletion)
-	prompt, windowStart, windowEnd := p.buildPrompt(req)
-
-	// Calculate max lines to receive (context window size)
-	maxLines := windowEnd - windowStart
+	// Build the prompt in Sweep's format (also returns window bounds and maxLines for streaming)
+	prompt, windowStart, windowEnd, maxLines := p.buildPrompt(req)
 
 	// Create the completion request with streaming enabled
 	// Sweep regenerates the entire window, so max_tokens must match max_context_tokens
@@ -126,8 +123,9 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 //
 // The model generates the updated content after the last marker.
 // Uses token-based context limiting (max_context_tokens) around the cursor.
-// Returns: (prompt, windowStart, windowEnd) where window bounds are 0-indexed line numbers.
-func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int) {
+// Returns: (prompt, windowStart, windowEnd, maxLines) where window bounds are 0-indexed line numbers.
+// maxLines is 0 if no trimming occurred (no limit needed), otherwise it's the window size.
+func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int, int) {
 	var promptBuilder strings.Builder
 
 	// Handle empty file edge case
@@ -141,7 +139,7 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int) 
 		promptBuilder.WriteString("<|file_sep|>updated/")
 		promptBuilder.WriteString(req.FilePath)
 		promptBuilder.WriteString("\n")
-		return promptBuilder.String(), 0, 0
+		return promptBuilder.String(), 0, 0, 0
 	}
 
 	// 1. Build diff history section (already trimmed by engine)
@@ -149,12 +147,20 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int) 
 
 	// 2. Trim content around cursor using max_context_tokens
 	cursorLine := req.CursorRow - 1 // Convert to 0-indexed
-	trimmedLines, _, _, trimOffset := utils.TrimContentAroundCursor(
+	trimmedLines, _, _, trimOffset, didTrim := utils.TrimContentAroundCursor(
 		req.Lines, cursorLine, req.CursorCol, p.config.MaxTokens)
 
 	// Calculate window bounds for parseCompletion
 	windowStart := trimOffset
 	windowEnd := trimOffset + len(trimmedLines)
+
+	// Calculate max lines for streaming limit:
+	// - If trimming occurred, limit to window size (content beyond window lacks context)
+	// - If no trimming, no limit (model has full context, will stop at stop tokens)
+	maxLines := 0
+	if didTrim {
+		maxLines = len(trimmedLines)
+	}
 
 	// 3. Get original content with same trim window
 	originalLines := p.getTrimmedOriginalContent(req, trimOffset, len(trimmedLines))
@@ -183,7 +189,7 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int) 
 	promptBuilder.WriteString(req.FilePath)
 	promptBuilder.WriteString("\n")
 
-	return promptBuilder.String(), windowStart, windowEnd
+	return promptBuilder.String(), windowStart, windowEnd, maxLines
 }
 
 // buildDiffSection builds the diff history section in Sweep's format.
@@ -273,6 +279,30 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 
 	// Split new text into lines
 	newLines := strings.Split(completionText, "\n")
+
+	// Validation 1: Anchor check - first line of output should match near start of window
+	// If it matches far into the window, the model skipped content or malfunctioned
+	if len(newLines) > 0 && len(oldLines) > 10 {
+		firstLineAnchor := utils.FindAnchorLineFullSearch(newLines[0], oldLines)
+		// Allow some tolerance (first 25% of window) for minor structural changes
+		maxAllowedAnchor := len(oldLines) / 4
+		if firstLineAnchor > maxAllowedAnchor {
+			logger.Debug("sweep completion rejected: first line anchors at %d (max allowed %d), model likely skipped content",
+				firstLineAnchor, maxAllowedAnchor)
+			return nil
+		}
+	}
+
+	// Validation 2: Line removal check - reject if removing more than 10% of lines
+	// This catches cases where model outputs dramatically fewer lines than expected
+	if len(oldLines) > 10 {
+		minAllowedLines := len(oldLines) * 9 / 10 // 90% of original
+		if len(newLines) < minAllowedLines {
+			logger.Debug("sweep completion rejected: output has %d lines, minimum allowed %d (90%% of %d)",
+				len(newLines), minAllowedLines, len(oldLines))
+			return nil
+		}
+	}
 
 	// Handle truncated output (finish_reason == "length") with anchor matching
 	processedLines, endLineInc, shouldReject := utils.HandleTruncatedCompletionWithAnchor(newLines, oldLines, finishReason, windowStart, windowEnd)
