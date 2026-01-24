@@ -17,7 +17,7 @@ var defaultLogger = &LimitedLogger{
 }
 
 // MaxLogLines defines the maximum number of lines to keep in the log file
-const MaxLogLines = 5000
+const MaxLogLines = 50000
 
 // LogLevel represents the logging level
 type LogLevel int
