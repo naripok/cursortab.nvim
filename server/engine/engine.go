@@ -32,12 +32,12 @@ type CursorPredictionConfig struct {
 }
 
 type EngineConfig struct {
-	NsID                     int
-	CompletionTimeout        time.Duration
-	IdleCompletionDelay      time.Duration
-	TextChangeDebounce       time.Duration
-	CursorPrediction CursorPredictionConfig
-	MaxDiffTokens            int  // Maximum tokens for diff history per file (0 = no limit)
+	NsID                int
+	CompletionTimeout   time.Duration
+	IdleCompletionDelay time.Duration
+	TextChangeDebounce  time.Duration
+	CursorPrediction    CursorPredictionConfig
+	MaxDiffTokens       int // Maximum tokens for diff history per file (0 = no limit)
 }
 
 type Engine struct {
@@ -74,10 +74,11 @@ type Engine struct {
 	completionOriginalLines []string
 
 	// Prefetch state
-	prefetchedCompletions   []*types.Completion
-	prefetchedCursorTarget  *types.CursorPredictionTarget
-	prefetchInProgress      bool
-	waitingForPrefetchOnTab bool
+	prefetchedCompletions              []*types.Completion
+	prefetchedCursorTarget             *types.CursorPredictionTarget
+	prefetchInProgress                 bool
+	waitingForPrefetchOnTab            bool
+	waitingForPrefetchCursorPrediction bool // Wait for prefetch to show cursor prediction (last stage, cursor on target)
 
 	// Config options
 	config EngineConfig
@@ -278,6 +279,32 @@ func (e *Engine) handleEvent(event Event) {
 			e.waitingForPrefetchOnTab = false
 			e.handleDeferredCursorTarget()
 		}
+
+		// If we were waiting for prefetch to show cursor prediction (last stage case),
+		// show cursor prediction to the first line that actually changes
+		if e.waitingForPrefetchCursorPrediction {
+			e.waitingForPrefetchCursorPrediction = false
+			if len(e.prefetchedCompletions) > 0 && e.n != nil {
+				comp := e.prefetchedCompletions[0]
+				// Extract old lines from buffer for the completion range
+				var oldLines []string
+				for i := comp.StartLine; i <= comp.EndLineInc && i-1 < len(e.buffer.Lines); i++ {
+					oldLines = append(oldLines, e.buffer.Lines[i-1])
+				}
+				// Find the first line that actually differs (baseOffset = StartLine - 1)
+				targetLine := text.FindFirstChangedLine(oldLines, comp.Lines, comp.StartLine-1)
+				// Only show if we found a changed line and cursor is not already on that line
+				if targetLine > 0 && e.buffer.Row != targetLine {
+					e.cursorTarget = &types.CursorPredictionTarget{
+						RelativePath:    e.buffer.Path,
+						LineNumber:      int32(targetLine),
+						ShouldRetrigger: false, // Will use prefetched data
+					}
+					e.state = stateHasCursorTarget
+					e.buffer.OnCursorPredictionReady(e.n, targetLine)
+				}
+			}
+		}
 	case EventPrefetchError:
 		if err, ok := event.Data.(error); ok && errors.Is(err, context.Canceled) {
 			logger.Debug("prefetch canceled: %v", err)
@@ -313,6 +340,7 @@ func (e *Engine) clearCompletionState() {
 	e.prefetchedCursorTarget = nil
 	e.prefetchInProgress = false
 	e.waitingForPrefetchOnTab = false
+	e.waitingForPrefetchCursorPrediction = false
 	e.completionOriginalLines = nil
 }
 
@@ -442,16 +470,49 @@ func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int,
 
 func (e *Engine) handleCursorTarget() {
 	if !e.config.CursorPrediction.Enabled {
-		e.reject()
+		e.clearCompletionUIOnly()
 		return
 	}
 
 	if e.cursorTarget != nil && e.cursorTarget.LineNumber >= 1 {
+		// Don't show cursor prediction if cursor is already on the target line
+		if e.buffer.Row == int(e.cursorTarget.LineNumber) {
+			// If prefetch is in progress, wait for it to show cursor prediction
+			// This handles the case where we're at the last stage and need to
+			// show the cursor prediction for the next completion
+			if e.prefetchInProgress {
+				e.waitingForPrefetchCursorPrediction = true
+			}
+			e.clearCompletionUIOnly()
+			return
+		}
+
 		e.state = stateHasCursorTarget
 		e.buffer.OnCursorPredictionReady(e.n, int(e.cursorTarget.LineNumber))
 	} else {
-		e.reject()
+		e.clearCompletionUIOnly()
 	}
+}
+
+// clearCompletionUIOnly clears completion state but preserves prefetch.
+// This is used when transitioning out of cursor target state without
+// wanting to cancel an in-flight prefetch.
+// NOTE: This does NOT call OnReject because it's expected that
+// clearCompletionStateExceptPrefetch() was already called before this,
+// which handles the UI clearing.
+func (e *Engine) clearCompletionUIOnly() {
+	if e.currentCancel != nil {
+		e.currentCancel()
+		e.currentCancel = nil
+	}
+	// NOTE: Don't cancel prefetch - it may still be useful
+	// NOTE: Don't call OnReject - it was already called by clearCompletionStateExceptPrefetch()
+	e.completions = nil
+	e.applyBatch = nil
+	e.stagedCompletion = nil
+	e.completionOriginalLines = nil
+	e.state = stateIdle
+	e.cursorTarget = nil
 }
 
 func (e *Engine) acceptCompletion() {
@@ -602,9 +663,26 @@ func (e *Engine) acceptCursorTarget() {
 	}
 
 	if len(e.prefetchedCompletions) > 0 {
+		// Sync buffer to get updated cursor position after move
+		e.buffer.SyncIn(e.n, e.WorkspacePath)
+
 		e.state = stateHasCompletion
 		e.completions = e.prefetchedCompletions
-		e.cursorTarget = e.prefetchedCursorTarget
+
+		// Use prefetched cursor target, or create one with retrigger if auto_advance enabled
+		// This ensures we continue fetching if there are more changes beyond this completion
+		if e.prefetchedCursorTarget != nil {
+			e.cursorTarget = e.prefetchedCursorTarget
+		} else if e.config.CursorPrediction.AutoAdvance && e.config.CursorPrediction.Enabled {
+			e.cursorTarget = &types.CursorPredictionTarget{
+				RelativePath:    e.buffer.Path,
+				LineNumber:      int32(e.completions[0].EndLineInc),
+				ShouldRetrigger: true,
+			}
+		} else {
+			e.cursorTarget = nil
+		}
+
 		e.prefetchedCompletions = nil
 		e.prefetchedCursorTarget = nil
 
@@ -669,9 +747,25 @@ func (e *Engine) handleDeferredCursorTarget() {
 
 	// Check if we now have prefetched completions
 	if len(e.prefetchedCompletions) > 0 {
+		// Sync buffer to get updated cursor position
+		e.buffer.SyncIn(e.n, e.WorkspacePath)
+
 		e.state = stateHasCompletion
 		e.completions = e.prefetchedCompletions
-		e.cursorTarget = e.prefetchedCursorTarget
+
+		// Use prefetched cursor target, or create one with retrigger if auto_advance enabled
+		if e.prefetchedCursorTarget != nil {
+			e.cursorTarget = e.prefetchedCursorTarget
+		} else if e.config.CursorPrediction.AutoAdvance && e.config.CursorPrediction.Enabled {
+			e.cursorTarget = &types.CursorPredictionTarget{
+				RelativePath:    e.buffer.Path,
+				LineNumber:      int32(e.completions[0].EndLineInc),
+				ShouldRetrigger: true,
+			}
+		} else {
+			e.cursorTarget = nil
+		}
+
 		e.prefetchedCompletions = nil
 		e.prefetchedCursorTarget = nil
 

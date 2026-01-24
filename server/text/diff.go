@@ -737,6 +737,28 @@ func (ld LineDiff) ToLuaFormat() map[string]any {
 	return luaFormat
 }
 
+// FindFirstChangedLine compares old lines with new lines and returns the first line number (1-indexed)
+// where they differ. Returns 0 if no differences found.
+// The baseLineOffset is added to the result to convert from relative to absolute line numbers.
+func FindFirstChangedLine(oldLines, newLines []string, baseLineOffset int) int {
+	// Quick path: find first differing line by direct comparison
+	minLen := min(len(oldLines), len(newLines))
+
+	for i := 0; i < minLen; i++ {
+		if oldLines[i] != newLines[i] {
+			return i + 1 + baseLineOffset // 1-indexed + offset
+		}
+	}
+
+	// If lengths differ, the first "extra" line is a change
+	if len(oldLines) != len(newLines) {
+		return minLen + 1 + baseLineOffset
+	}
+
+	// No differences found
+	return 0
+}
+
 // ToLuaFormat converts a DiffResult to a Lua-friendly map format
 // Additional fields can be passed as key-value pairs: ToLuaFormat("startLine", 10, "endLineInclusive", 15)
 func (dr *DiffResult) ToLuaFormat(additionalFields ...any) map[string]any {

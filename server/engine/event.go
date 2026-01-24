@@ -250,7 +250,8 @@ func (e *Engine) handleCompletionReady(response *types.CompletionResponse) {
 				diffResult := text.AnalyzeDiffForStaging(originalText, newText)
 
 				// Check if we should split
-				if text.ShouldSplitCompletion(diffResult, e.config.CursorPrediction.DistThreshold) {
+				// Only split when line counts are equal - staging coordinate mapping breaks when lines are added/deleted
+				if len(originalLines) == len(completion.Lines) && text.ShouldSplitCompletion(diffResult, e.config.CursorPrediction.DistThreshold) {
 					clusters := text.ClusterChanges(diffResult, e.config.CursorPrediction.DistThreshold)
 					if len(clusters) > 1 {
 						// Create staged completion
