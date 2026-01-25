@@ -258,6 +258,8 @@ local function create_overlay_window(parent_win, buffer_line, col, content, synt
 		style = "minimal",
 		zindex = 1,
 		focusable = false,
+		-- Prevent Neovim from auto-adjusting window position when it doesn't fit
+		fixed = true,
 	})
 
 	-- Set background highlighting to match main window
