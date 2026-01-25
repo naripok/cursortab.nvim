@@ -338,10 +338,26 @@ local function show_completion(diff_result)
 		---@type LineDiff
 		local line_diff = change
 		if sorted_line_num > 0 then
-			-- Convert from relative line number to absolute buffer line number
-			-- diff_result line numbers are relative to the extracted range (startLine to endLineInclusive)
+			-- Determine the correct buffer line based on change type:
+			-- - Modification types (append_chars, delete_chars, replace_chars, modification, deletion)
+			--   use oldLineNum because they modify existing buffer lines
+			-- - Addition types use newLineNum (the map key) because they insert new content
 			---@type integer
-			local absolute_line_num = (diff_result.startLine or 1) + sorted_line_num - 1
+			local absolute_line_num
+			local is_modification_type = line_diff.type == "append_chars"
+				or line_diff.type == "delete_chars"
+				or line_diff.type == "replace_chars"
+				or line_diff.type == "modification"
+				or line_diff.type == "deletion"
+
+			if is_modification_type and line_diff.oldLineNum and line_diff.oldLineNum > 0 then
+				-- Use oldLineNum for modifications - this is the actual buffer position
+				absolute_line_num = (diff_result.startLine or 1) + line_diff.oldLineNum - 1
+			else
+				-- Use the map key (newLineNum) for additions and fallback
+				absolute_line_num = (diff_result.startLine or 1) + sorted_line_num - 1
+			end
+
 			-- Convert to 0-based line number for nvim API
 			---@type integer
 			local nvim_line = absolute_line_num - 1

@@ -273,11 +273,12 @@ func applyVisualGroupsToDiffResult(diffResult *DiffResult, visualGroups []*types
 
 		// Determine the group type
 		var groupType DiffType
-		if vg.Type == "modification" {
+		switch vg.Type {
+		case "modification":
 			groupType = LineModificationGroup
-		} else if vg.Type == "addition" {
+		case "addition":
 			groupType = LineAdditionGroup
-		} else {
+		default:
 			continue
 		}
 

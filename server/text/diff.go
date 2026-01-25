@@ -402,7 +402,7 @@ func processLineDiffsWithMapping(lineDiffs []diffmatchpatch.Diff, result *DiffRe
 		switch diff.Type {
 		case diffmatchpatch.DiffEqual:
 			// Equal lines map 1:1
-			for j := 0; j < len(lines); j++ {
+			for j := range len(lines) {
 				if newLineNum+j < newLineCount {
 					newToOld[newLineNum+j] = oldLineNum + j + 1 // 1-indexed
 				}
@@ -717,6 +717,8 @@ func (ld LineDiff) ToLuaFormat() map[string]any {
 	luaFormat := map[string]any{
 		"type":       ld.Type.String(),
 		"lineNumber": ld.LineNumber,
+		"oldLineNum": ld.OldLineNum, // Original buffer position (for modifications)
+		"newLineNum": ld.NewLineNum, // New content position (for additions)
 		"content":    ld.Content,
 		"oldContent": ld.OldContent,
 		"colStart":   ld.ColStart,
@@ -741,7 +743,7 @@ func FindFirstChangedLine(oldLines, newLines []string, baseLineOffset int) int {
 	// Quick path: find first differing line by direct comparison
 	minLen := min(len(oldLines), len(newLines))
 
-	for i := 0; i < minLen; i++ {
+	for i := range minLen {
 		if oldLines[i] != newLines[i] {
 			return i + 1 + baseLineOffset // 1-indexed + offset
 		}

@@ -234,7 +234,7 @@ func getClusterBufferRange(cluster *ChangeCluster, baseLineOffset int, diff *Dif
 
 // getClusterNewLineRange determines the new line range for content extraction.
 // Returns (startLine, endLine) in new-text coordinates (1-indexed).
-func getClusterNewLineRange(cluster *ChangeCluster, diff *DiffResult) (int, int) {
+func getClusterNewLineRange(cluster *ChangeCluster) (int, int) {
 	minNewLine := -1
 	maxNewLine := -1
 
@@ -274,7 +274,7 @@ func createCompletionFromCluster(cluster *ChangeCluster, newLines []string, base
 	bufferStartLine, bufferEndLine := getClusterBufferRange(cluster, baseLineOffset, diff)
 
 	// Get new line range for content extraction
-	newStartLine, newEndLine := getClusterNewLineRange(cluster, diff)
+	newStartLine, newEndLine := getClusterNewLineRange(cluster)
 
 	// Extract the new content using new coordinates
 	var lines []string
@@ -328,18 +328,45 @@ func buildStagesFromClusters(clusters []*ChangeCluster, newLines []string, fileP
 		}
 
 		// Compute visual groups for this cluster's changes
-		oldLinesForCluster := make([]string, len(newLines))
+		// Use the stage's lines (completion.Lines) rather than full newLines to ensure
+		// visual groups only reference lines within the stage's content
+		stageLines := completion.Lines
+		oldLinesForCluster := make([]string, len(stageLines))
+
+		// Get the new line range for this cluster to calculate relative line numbers
+		newStartLine, _ := getClusterNewLineRange(cluster)
+
 		for lineNum, change := range cluster.Changes {
 			// Use NewLineNum if available for proper alignment
-			idx := lineNum - 1
+			newLineNum := lineNum
 			if change.NewLineNum > 0 {
-				idx = change.NewLineNum - 1
+				newLineNum = change.NewLineNum
 			}
-			if idx >= 0 && idx < len(oldLinesForCluster) {
-				oldLinesForCluster[idx] = change.OldContent
+			// Convert to relative index within the stage's content
+			relativeIdx := newLineNum - newStartLine
+			if relativeIdx >= 0 && relativeIdx < len(oldLinesForCluster) {
+				oldLinesForCluster[relativeIdx] = change.OldContent
 			}
 		}
-		visualGroups := computeVisualGroups(cluster.Changes, newLines, oldLinesForCluster)
+
+		// Create a remapped changes map with line numbers relative to the stage content
+		remappedChanges := make(map[int]LineDiff)
+		for lineNum, change := range cluster.Changes {
+			newLineNum := lineNum
+			if change.NewLineNum > 0 {
+				newLineNum = change.NewLineNum
+			}
+			// Convert to relative line number (1-indexed within stage content)
+			relativeLine := newLineNum - newStartLine + 1
+			if relativeLine > 0 && relativeLine <= len(stageLines) {
+				remappedChange := change
+				remappedChange.LineNumber = relativeLine
+				remappedChange.NewLineNum = relativeLine
+				remappedChanges[relativeLine] = remappedChange
+			}
+		}
+
+		visualGroups := computeVisualGroups(remappedChanges, stageLines, oldLinesForCluster)
 
 		stages = append(stages, &types.CompletionStage{
 			Completion:   completion,
@@ -370,10 +397,16 @@ func computeVisualGroups(changes map[int]LineDiff, newLines, oldLines []string) 
 		return nil
 	}
 
-	// Get sorted line numbers
+	// Get sorted line numbers, filtering out any that exceed newLines bounds
 	var lineNumbers []int
 	for ln := range changes {
-		lineNumbers = append(lineNumbers, ln)
+		// Only include line numbers that are within the available content
+		if ln > 0 && ln <= len(newLines) {
+			lineNumbers = append(lineNumbers, ln)
+		}
+	}
+	if len(lineNumbers) == 0 {
+		return nil
 	}
 	sort.Ints(lineNumbers)
 

@@ -718,3 +718,159 @@ func TestGetClusterBufferRange_AllInsertions(t *testing.T) {
 	assert.True(t, start <= end, fmt.Sprintf("valid range: start=%d end=%d", start, end))
 	assert.Equal(t, 1, start, "insertions anchor to line 1")
 }
+
+// =============================================================================
+// Test for the bug: visual groups containing lines outside stage's content
+// =============================================================================
+
+func TestStageVisualGroups_ShouldNotExceedStageContent(t *testing.T) {
+	// This test reproduces the bug from cursortab.2.log where:
+	// - Full completion has 54 lines
+	// - First stage has 17 lines
+	// - But the stage's VisualGroups contained a group at lines 41-54
+	//
+	// The stage's visual groups should ONLY reference lines within the stage's content.
+
+	// Create a diff that mimics the log scenario:
+	// - Original: 3 lines (buffer lines 37-39)
+	// - New: 54 lines (full completion)
+	// - Changes at various line numbers including high ones (41-54)
+	changes := make(map[int]LineDiff)
+
+	// Add changes at low line numbers (will be in first cluster)
+	for i := 1; i <= 17; i++ {
+		changes[i] = LineDiff{
+			Type:       LineAddition,
+			LineNumber: i,
+			NewLineNum: i,
+			OldLineNum: -1,
+			Content:    fmt.Sprintf("line%d", i),
+		}
+	}
+
+	// Add changes at high line numbers (should be in separate cluster)
+	for i := 41; i <= 54; i++ {
+		changes[i] = LineDiff{
+			Type:       LineAddition,
+			LineNumber: i,
+			NewLineNum: i,
+			OldLineNum: -1,
+			Content:    fmt.Sprintf("line%d", i),
+		}
+	}
+
+	diff := &DiffResult{
+		Changes:      changes,
+		OldLineCount: 3,
+		NewLineCount: 54,
+	}
+
+	// Create newLines for full completion
+	newLines := make([]string, 54)
+	for i := range newLines {
+		newLines[i] = fmt.Sprintf("content%d", i+1)
+	}
+
+	// Create stages with proximity threshold of 3
+	// Gap between line 17 and 41 is 24, so they should be in separate clusters
+	stages := CreateStages(diff, 1, 1, 100, 1, 3, "test.go", newLines)
+
+	// Should have at least 2 stages (may have more due to viewport partitioning)
+	assert.True(t, len(stages) >= 2, fmt.Sprintf("should have at least 2 stages, got %d", len(stages)))
+
+	// CRITICAL: For ALL stages, VisualGroups should NOT reference lines
+	// beyond the stage's content line count
+	for i, stage := range stages {
+		stageLineCount := len(stage.Completion.Lines)
+
+		for _, vg := range stage.VisualGroups {
+			assert.True(t, vg.StartLine <= stageLineCount,
+				fmt.Sprintf("Stage %d: VisualGroup StartLine (%d) exceeds stage content line count (%d)",
+					i, vg.StartLine, stageLineCount))
+			assert.True(t, vg.EndLine <= stageLineCount,
+				fmt.Sprintf("Stage %d: VisualGroup EndLine (%d) exceeds stage content line count (%d)",
+					i, vg.EndLine, stageLineCount))
+		}
+	}
+}
+
+func TestComputeVisualGroups_ShouldNotReferenceOutOfBoundsLines(t *testing.T) {
+	// Test that computeVisualGroups doesn't create groups with lines beyond newLines length
+
+	// Cluster has changes at lines 1-5 and 41-45
+	// But newLines only has 10 entries
+	changes := map[int]LineDiff{
+		1:  {Type: LineAddition, LineNumber: 1, NewLineNum: 1, Content: "line1"},
+		2:  {Type: LineAddition, LineNumber: 2, NewLineNum: 2, Content: "line2"},
+		3:  {Type: LineAddition, LineNumber: 3, NewLineNum: 3, Content: "line3"},
+		41: {Type: LineAddition, LineNumber: 41, NewLineNum: 41, Content: "line41"},
+		42: {Type: LineAddition, LineNumber: 42, NewLineNum: 42, Content: "line42"},
+	}
+
+	newLines := make([]string, 10) // Only 10 lines
+	for i := range newLines {
+		newLines[i] = fmt.Sprintf("content%d", i+1)
+	}
+	oldLines := make([]string, 10)
+
+	groups := computeVisualGroups(changes, newLines, oldLines)
+
+	// Visual groups should only reference lines within newLines bounds
+	for _, vg := range groups {
+		assert.True(t, vg.StartLine <= len(newLines),
+			fmt.Sprintf("VisualGroup StartLine (%d) exceeds newLines length (%d)",
+				vg.StartLine, len(newLines)))
+		assert.True(t, vg.EndLine <= len(newLines),
+			fmt.Sprintf("VisualGroup EndLine (%d) exceeds newLines length (%d)",
+				vg.EndLine, len(newLines)))
+
+		// Group's Lines should not be empty if StartLine is within bounds
+		if vg.StartLine <= len(newLines) {
+			assert.True(t, len(vg.Lines) > 0,
+				fmt.Sprintf("VisualGroup at line %d has empty Lines", vg.StartLine))
+		}
+	}
+}
+
+func TestBuildStagesFromClusters_VisualGroupsUseClusterNewLines(t *testing.T) {
+	// Test that buildStagesFromClusters computes visual groups using
+	// only the lines relevant to each cluster, not the full newLines
+
+	// Create a cluster with changes at lines 1-3
+	cluster := &ChangeCluster{
+		StartLine: 1,
+		EndLine:   3,
+		Changes: map[int]LineDiff{
+			1: {Type: LineAddition, LineNumber: 1, NewLineNum: 1, OldLineNum: -1, Content: "new1"},
+			2: {Type: LineAddition, LineNumber: 2, NewLineNum: 2, OldLineNum: -1, Content: "new2"},
+			3: {Type: LineAddition, LineNumber: 3, NewLineNum: 3, OldLineNum: -1, Content: "new3"},
+		},
+	}
+
+	// Full newLines has 50 entries, but the cluster only uses lines 1-3
+	fullNewLines := make([]string, 50)
+	for i := range fullNewLines {
+		fullNewLines[i] = fmt.Sprintf("fullcontent%d", i+1)
+	}
+
+	diff := &DiffResult{
+		Changes:      cluster.Changes,
+		OldLineCount: 3,
+		NewLineCount: 50,
+	}
+
+	stages := buildStagesFromClusters([]*ChangeCluster{cluster}, fullNewLines, "test.go", 1, diff)
+
+	assert.Len(t, 1, stages, "should have 1 stage")
+
+	stage := stages[0]
+
+	// The stage's completion should only have 3 lines
+	assert.Equal(t, 3, len(stage.Completion.Lines), "stage completion should have 3 lines")
+
+	// The visual groups should only reference lines 1-3
+	for _, vg := range stage.VisualGroups {
+		assert.True(t, vg.EndLine <= 3,
+			fmt.Sprintf("VisualGroup EndLine (%d) should be <= 3 (stage content size)", vg.EndLine))
+	}
+}
