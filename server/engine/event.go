@@ -77,7 +77,7 @@ func (e *Engine) handleTextChangeImpl() {
 		return
 	}
 
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	matches, hasRemaining := e.checkTypingMatchesPrediction()
 	if matches {
@@ -192,7 +192,7 @@ func (e *Engine) handleCompletionReadyImpl(response *types.CompletionResponse) {
 
 	// Sync buffer to get current cursor position - the user may have moved
 	// the cursor while we were waiting for the completion
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	if len(response.Completions) == 0 {
 		e.handleCursorTarget()

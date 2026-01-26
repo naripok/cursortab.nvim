@@ -52,7 +52,7 @@ func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int,
 	}
 
 	// Sync buffer to ensure latest context
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	ctx, cancel := context.WithTimeout(e.mainCtx, e.config.CompletionTimeout)
 	e.prefetchCancel = cancel
@@ -152,7 +152,7 @@ func (e *Engine) tryShowPrefetchedCompletion() bool {
 	}
 
 	// Sync buffer to get current cursor position
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	comp := e.prefetchedCompletions[0]
 	cursorTarget := e.prefetchedCursorTarget
@@ -193,7 +193,7 @@ func (e *Engine) handleDeferredCursorTarget() {
 	// Check if we now have prefetched completions
 	if len(e.prefetchedCompletions) > 0 {
 		// Sync buffer to get updated cursor position
-		e.buffer.SyncIn(e.n, e.WorkspacePath)
+		e.syncBuffer()
 
 		comp := e.prefetchedCompletions[0]
 		cursorTarget := e.prefetchedCursorTarget
@@ -234,7 +234,7 @@ func (e *Engine) usePrefetchedCompletion() bool {
 	}
 
 	// Sync buffer to get updated cursor position after move
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	comp := e.prefetchedCompletions[0]
 	cursorTarget := e.prefetchedCursorTarget

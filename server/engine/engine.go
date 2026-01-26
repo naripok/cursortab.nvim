@@ -33,6 +33,15 @@ type CursorPredictionConfig struct {
 	DistThreshold int  // Lines apart to trigger staging (default: 3)
 }
 
+// FileState holds per-file context that persists across file switches
+type FileState struct {
+	PreviousLines []string           // Content before user started editing this file
+	DiffHistories []*types.DiffEntry // Cumulative diffs for this file
+	OriginalLines []string           // Snapshot when editing session began
+	LastAccessNs  int64              // Monotonic timestamp for LRU eviction
+	Version       int                // Buffer version when last active
+}
+
 type EngineConfig struct {
 	NsID                int
 	CompletionTimeout   time.Duration
@@ -83,8 +92,8 @@ type Engine struct {
 	// Config options
 	config EngineConfig
 
-	// Per-file cumulative diff histories within the current workspace
-	fileDiffStore map[string][]*types.DiffEntry
+	// Per-file state that persists across file switches (for context restoration)
+	fileStateStore map[string]*FileState
 }
 
 func NewEngine(provider types.Provider, config EngineConfig) (*Engine, error) {
@@ -121,7 +130,7 @@ func NewEngine(provider types.Provider, config EngineConfig) (*Engine, error) {
 		prefetchedCursorTarget: nil,
 		prefetchState:          prefetchNone,
 		stopped:                false,
-		fileDiffStore:           make(map[string][]*types.DiffEntry),
+		fileStateStore:         make(map[string]*FileState),
 	}, nil
 }
 
@@ -369,6 +378,20 @@ func (e *Engine) reject() {
 	e.state = stateIdle
 }
 
+// syncBuffer syncs the buffer state and handles file switching.
+// This should be called instead of buffer.SyncIn directly to ensure
+// file context is properly saved/restored when switching files.
+func (e *Engine) syncBuffer() {
+	if e.n == nil {
+		return
+	}
+
+	result := e.buffer.SyncIn(e.n, e.WorkspacePath)
+	if result != nil && result.BufferChanged {
+		e.handleFileSwitch(result.OldPath, result.NewPath, e.buffer.Lines)
+	}
+}
+
 func (e *Engine) requestCompletion(source types.CompletionSource) {
 	// Check if stopped before making request
 	if e.stopped || e.n == nil {
@@ -376,7 +399,7 @@ func (e *Engine) requestCompletion(source types.CompletionSource) {
 	}
 
 	e.state = statePendingCompletion
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	ctx, cancel := context.WithTimeout(e.mainCtx, e.config.CompletionTimeout)
 	e.currentCancel = cancel
@@ -507,16 +530,8 @@ func (e *Engine) acceptCompletion() {
 	// Commit pending file changes only after successful apply
 	e.buffer.CommitPendingEdit()
 
-	// After commit, update per-file diff store for the current file
-	if e.buffer.Path != "" && len(e.buffer.DiffHistories) > 0 {
-		// Copy slice to avoid aliasing
-		diffs := make([]*types.DiffEntry, len(e.buffer.DiffHistories))
-		copy(diffs, e.buffer.DiffHistories)
-		e.fileDiffStore[e.buffer.Path] = diffs
-
-		// Keep at most two files in file histories
-		e.trimFileDiffStoreToMaxFiles(2)
-	}
+	// After commit, save file state for context persistence across file switches
+	e.saveCurrentFileState()
 
 	e.clearKeepPrefetch()
 
@@ -533,7 +548,7 @@ func (e *Engine) acceptCompletion() {
 		e.stagedCompletion.CurrentIdx++
 		if e.stagedCompletion.CurrentIdx < len(e.stagedCompletion.Stages) {
 			// More stages remaining - sync buffer and show cursor target to next stage
-			e.buffer.SyncIn(e.n, e.WorkspacePath)
+			e.syncBuffer()
 
 			// Apply cumulative offset to remaining stages if line counts changed
 			if e.stagedCompletion.CumulativeOffset != 0 {
@@ -571,7 +586,7 @@ func (e *Engine) acceptCompletion() {
 	}
 
 	// Sync buffer to get the updated state after applying completion
-	e.buffer.SyncIn(e.n, e.WorkspacePath)
+	e.syncBuffer()
 
 	// Prefetch next completion if cursor target requests retrigger (after applying current completion)
 	// Skip if prefetch is already in flight (e.g., triggered at n-1 stage)
@@ -584,80 +599,180 @@ func (e *Engine) acceptCompletion() {
 	e.handleCursorTarget()
 }
 
-// trimFileDiffStoreToMaxFiles keeps only the most recent maxFiles files in the diff store
-func (e *Engine) trimFileDiffStoreToMaxFiles(maxFiles int) {
-	if len(e.fileDiffStore) <= maxFiles {
+// saveCurrentFileState saves the current buffer state to the file state store
+func (e *Engine) saveCurrentFileState() {
+	if e.buffer.Path == "" {
 		return
 	}
 
-	// Convert to slice for sorting by some criteria (e.g., file name for deterministic behavior)
-	type fileEntry struct {
-		fileName string
-		diffs    []*types.DiffEntry
+	state := &FileState{
+		PreviousLines: copyLines(e.buffer.PreviousLines),
+		DiffHistories: copyDiffs(e.buffer.DiffHistories),
+		OriginalLines: copyLines(e.buffer.GetOriginalLines()),
+		LastAccessNs:  time.Now().UnixNano(),
+		Version:       e.buffer.Version,
 	}
 
-	var entries []fileEntry
-	for fileName, diffs := range e.fileDiffStore {
-		entries = append(entries, fileEntry{fileName, diffs})
+	e.fileStateStore[e.buffer.Path] = state
+	e.trimFileStateStore(2) // Keep at most 2 files
+}
+
+// handleFileSwitch manages file state when switching between files.
+// Called after SyncIn detects a buffer change. Returns true if state was restored.
+func (e *Engine) handleFileSwitch(oldPath, newPath string, currentLines []string) bool {
+	if oldPath == newPath {
+		return false
 	}
 
-	// Sort by file name to ensure deterministic behavior
-	// In a real implementation, you might want to sort by last access time
+	// Save state of the file we're leaving
+	if oldPath != "" {
+		state := &FileState{
+			PreviousLines: copyLines(e.buffer.PreviousLines),
+			DiffHistories: copyDiffs(e.buffer.DiffHistories),
+			OriginalLines: copyLines(e.buffer.GetOriginalLines()),
+			LastAccessNs:  time.Now().UnixNano(),
+			Version:       e.buffer.Version,
+		}
+		e.fileStateStore[oldPath] = state
+	}
+
+	// Try to restore state for the new file
+	if state, exists := e.fileStateStore[newPath]; exists {
+		if e.isFileStateValid(state, currentLines) {
+			// Restore the saved state
+			e.buffer.SetFileContext(state.PreviousLines, state.DiffHistories, state.OriginalLines)
+			state.LastAccessNs = time.Now().UnixNano()
+			logger.Debug("restored file state for %s (version=%d, diffs=%d)", newPath, state.Version, len(state.DiffHistories))
+			return true
+		}
+		// State is stale (file changed externally) - discard it
+		delete(e.fileStateStore, newPath)
+		logger.Debug("discarded stale file state for %s", newPath)
+	}
+
+	// New file or stale state - initialize fresh (PreviousLines stays nil for new files)
+	e.buffer.SetFileContext(nil, nil, copyLines(currentLines))
+	return false
+}
+
+// isFileStateValid checks if saved state is still valid for the current file content.
+// Returns false if the file appears to have changed externally.
+func (e *Engine) isFileStateValid(state *FileState, currentLines []string) bool {
+	if len(state.OriginalLines) == 0 {
+		return false
+	}
+
+	// Simple heuristic: if line count changed significantly, state is stale
+	origLen := len(state.OriginalLines)
+	currLen := len(currentLines)
+	if origLen != currLen {
+		// Allow some tolerance for small changes
+		diff := origLen - currLen
+		if diff < 0 {
+			diff = -diff
+		}
+		// If more than 10% difference or more than 10 lines, consider stale
+		threshold := max(origLen/10, 10)
+		if diff > threshold {
+			return false
+		}
+	}
+
+	// Check anchor lines (first, middle, last) for major content drift
+	checkIndices := []int{0}
+	if currLen > 2 {
+		checkIndices = append(checkIndices, currLen/2, currLen-1)
+	}
+
+	mismatches := 0
+	for _, i := range checkIndices {
+		if i < len(state.OriginalLines) && i < len(currentLines) {
+			if state.OriginalLines[i] != currentLines[i] {
+				mismatches++
+			}
+		}
+	}
+
+	// If more than half of anchor lines changed, consider stale
+	return mismatches <= len(checkIndices)/2
+}
+
+// trimFileStateStore keeps only the most recently accessed maxFiles files
+func (e *Engine) trimFileStateStore(maxFiles int) {
+	if len(e.fileStateStore) <= maxFiles {
+		return
+	}
+
+	type entry struct {
+		path  string
+		state *FileState
+	}
+
+	entries := make([]entry, 0, len(e.fileStateStore))
+	for path, state := range e.fileStateStore {
+		entries = append(entries, entry{path, state})
+	}
+
+	// Sort by LastAccessNs descending (most recent first)
 	for i := 0; i < len(entries)-1; i++ {
 		for j := i + 1; j < len(entries); j++ {
-			if entries[i].fileName > entries[j].fileName {
+			if entries[i].state.LastAccessNs < entries[j].state.LastAccessNs {
 				entries[i], entries[j] = entries[j], entries[i]
 			}
 		}
 	}
 
-	// Keep only the first maxFiles entries
-	entriesToKeep := entries
-	if len(entries) > maxFiles {
-		entriesToKeep = entries[:maxFiles]
+	// Keep only maxFiles most recent entries
+	e.fileStateStore = make(map[string]*FileState)
+	for i := 0; i < maxFiles && i < len(entries); i++ {
+		e.fileStateStore[entries[i].path] = entries[i].state
 	}
-
-	// Rebuild the map with only the kept entries
-	newFileDiffStore := make(map[string][]*types.DiffEntry)
-	for _, entry := range entriesToKeep {
-		newFileDiffStore[entry.fileName] = entry.diffs
-	}
-
-	e.fileDiffStore = newFileDiffStore
 }
 
-// getAllFileDiffHistories returns all known file diff histories in provider format
+// getAllFileDiffHistories returns diff history for the current file only.
+// This prevents context pollution from other files' diffs.
 func (e *Engine) getAllFileDiffHistories() []*types.FileDiffHistory {
-	if len(e.fileDiffStore) == 0 {
+	// Only return diffs for the current file
+	if e.buffer.Path == "" || len(e.buffer.DiffHistories) == 0 {
 		return nil
 	}
-	histories := make([]*types.FileDiffHistory, 0, len(e.fileDiffStore))
-	for fileName, diffs := range e.fileDiffStore {
-		if len(diffs) == 0 {
-			continue
-		}
-		// Copy to ensure immutability
-		copyDiffs := make([]*types.DiffEntry, len(diffs))
-		copy(copyDiffs, diffs)
 
-		// Apply token limiting if configured
-		if e.config.MaxDiffTokens > 0 {
-			copyDiffs = utils.TrimDiffEntries(copyDiffs, e.config.MaxDiffTokens)
-		}
+	// Copy to ensure immutability
+	diffs := copyDiffs(e.buffer.DiffHistories)
 
-		if len(copyDiffs) == 0 {
-			continue
-		}
-
-		histories = append(histories, &types.FileDiffHistory{
-			FileName:    fileName,
-			DiffHistory: copyDiffs,
-		})
+	// Apply token limiting if configured
+	if e.config.MaxDiffTokens > 0 {
+		diffs = utils.TrimDiffEntries(diffs, e.config.MaxDiffTokens)
 	}
-	if len(histories) == 0 {
+
+	if len(diffs) == 0 {
 		return nil
 	}
-	return histories
+
+	return []*types.FileDiffHistory{{
+		FileName:    e.buffer.Path,
+		DiffHistory: diffs,
+	}}
+}
+
+// copyLines creates a deep copy of a string slice
+func copyLines(lines []string) []string {
+	if lines == nil {
+		return nil
+	}
+	result := make([]string, len(lines))
+	copy(result, lines)
+	return result
+}
+
+// copyDiffs creates a deep copy of a DiffEntry slice
+func copyDiffs(diffs []*types.DiffEntry) []*types.DiffEntry {
+	if diffs == nil {
+		return nil
+	}
+	result := make([]*types.DiffEntry, len(diffs))
+	copy(result, diffs)
+	return result
 }
 
 func (e *Engine) acceptCursorTarget() {
@@ -676,7 +791,7 @@ func (e *Engine) acceptCursorTarget() {
 
 	// Handle staged completions: if there are more stages, show the next stage
 	if e.stagedCompletion != nil && e.stagedCompletion.CurrentIdx < len(e.stagedCompletion.Stages) {
-		e.buffer.SyncIn(e.n, e.WorkspacePath)
+		e.syncBuffer()
 		e.showCurrentStage()
 		return
 	}

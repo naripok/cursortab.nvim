@@ -71,6 +71,34 @@ func (b *Buffer) MoveCursorToStartOfLine(n *nvim.Nvim, line int, center bool, ma
 	return batch.Execute()
 }
 
+// SetFileContext restores file-specific state when switching back to a previously edited file.
+// This is called by the engine after detecting a file switch.
+func (b *Buffer) SetFileContext(previousLines []string, diffHistories []*types.DiffEntry, originalLines []string) {
+	if previousLines != nil {
+		b.PreviousLines = make([]string, len(previousLines))
+		copy(b.PreviousLines, previousLines)
+	} else {
+		b.PreviousLines = nil
+	}
+
+	if diffHistories != nil {
+		b.DiffHistories = make([]*types.DiffEntry, len(diffHistories))
+		copy(b.DiffHistories, diffHistories)
+	} else {
+		b.DiffHistories = []*types.DiffEntry{}
+	}
+
+	if originalLines != nil {
+		b.originalLines = make([]string, len(originalLines))
+		copy(b.originalLines, originalLines)
+	}
+}
+
+// GetOriginalLines returns the original file content when editing session started
+func (b *Buffer) GetOriginalLines() []string {
+	return b.originalLines
+}
+
 func applyCursorMove(batch *nvim.Batch, line, col int, center bool, mark bool) {
 	if mark {
 		batch.ExecLua("vim.cmd('normal! m\\'')", nil, nil)
@@ -93,7 +121,14 @@ func (b *Buffer) executeLuaFunction(n *nvim.Nvim, luaCode string, args ...any) {
 	}
 }
 
-func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
+// SyncInResult contains information about the sync operation
+type SyncInResult struct {
+	BufferChanged bool   // True if we switched to a different buffer
+	OldPath       string // Path of the previous buffer (empty if no previous)
+	NewPath       string // Path of the current buffer
+}
+
+func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) *SyncInResult {
 	// Use batch API to make all calls in a single round-trip
 	batch := n.NewBatch()
 
@@ -124,13 +159,16 @@ func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
 
 	if err := batch.Execute(); err != nil {
 		logger.Error("error executing sync batch: %v", err)
-		return
+		return nil
 	}
 
 	linesStr := make([]string, len(lines))
 	for i, line := range lines {
 		linesStr[i] = string(line[:])
 	}
+
+	// Store old path before updating
+	oldPath := b.Path
 
 	// Update buffer state
 	b.Lines = linesStr
@@ -148,18 +186,25 @@ func (b *Buffer) SyncIn(n *nvim.Nvim, workspacePath string) {
 
 	// Handle buffer change
 	if b.id != currentBuf {
-		// New buffer - capture original state
+		// New buffer - update buffer ID and reset basic state
+		// Note: PreviousLines, DiffHistories, and originalLines are managed by the engine
+		// to enable proper context restoration when switching back to this file
 		b.id = currentBuf
-		b.originalLines = make([]string, len(linesStr))
-		copy(b.originalLines, linesStr)
-		// Initialize PreviousLines to current content (no edits yet)
-		b.PreviousLines = make([]string, len(linesStr))
-		copy(b.PreviousLines, linesStr)
-		b.DiffHistories = []*types.DiffEntry{}
 		b.lastModifiedLine = -1
 		b.Version = 0
-	} else {
-		// Existing buffer - keep current diff histories; no action on sync
+
+		return &SyncInResult{
+			BufferChanged: true,
+			OldPath:       oldPath,
+			NewPath:       relativePath,
+		}
+	}
+
+	// Same buffer - no change
+	return &SyncInResult{
+		BufferChanged: false,
+		OldPath:       oldPath,
+		NewPath:       relativePath,
 	}
 }
 
