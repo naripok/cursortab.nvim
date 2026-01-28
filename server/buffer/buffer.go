@@ -282,8 +282,8 @@ func (b *NvimBuffer) PrepareCompletion(startLine, endLineInc int, lines []string
 		originalLines = append(originalLines, b.lines[i-1])
 	}
 
-	// Use pre-computed groups or compute fresh ones
-	if groups == nil && len(diffResult.Changes) > 0 {
+	// Always compute groups from fresh diff (pre-computed groups may be stale)
+	if len(diffResult.Changes) > 0 {
 		groups = text.GroupChanges(diffResult.Changes)
 	}
 

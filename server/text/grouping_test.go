@@ -275,3 +275,44 @@ func TestCalculateCursorPosition_ClampToBuffer(t *testing.T) {
 
 	assert.True(t, line <= len(newLines), "cursor clamped to buffer size")
 }
+
+// TestGroupsMustReflectActualBufferState verifies that groups computed from the
+// actual buffer diff can differ from pre-computed groups when buffer state changes.
+func TestGroupsMustReflectActualBufferState(t *testing.T) {
+	// Scenario: completion expands 1 line to 2 lines, where line 1 is unchanged
+	// First diff (1 old vs 2 new) sees: line 1 EQUAL, line 2 ADDITION
+	oldLine := "const x = 1;"
+	newLines := []string{"const x = 1;", "const y = 2;"}
+
+	firstDiff := ComputeDiff(JoinLines([]string{oldLine}), JoinLines(newLines))
+
+	assert.Equal(t, 1, len(firstDiff.Changes), "first diff: 1 change")
+	assert.Equal(t, ChangeAddition, firstDiff.Changes[2].Type, "first diff: addition at line 2")
+
+	firstGroups := GroupChanges(firstDiff.Changes)
+	assert.Equal(t, 1, len(firstGroups), "first diff: 1 group")
+	assert.Equal(t, "addition", firstGroups[0].Type, "first diff group: addition")
+	assert.Nil(t, firstGroups[0].OldLines, "addition has no old_lines")
+
+	// But when applying to actual buffer, line 2 has different content
+	// Second diff (actual buffer vs new content) sees: MODIFICATION
+	actualBufferLine := "const y = 0;"
+	newContent := "const y = 2;"
+
+	secondDiff := ComputeDiff(JoinLines([]string{actualBufferLine}), JoinLines([]string{newContent}))
+
+	assert.Equal(t, 1, len(secondDiff.Changes), "second diff: 1 change")
+	change := secondDiff.Changes[1]
+	isModification := change.Type == ChangeModification || change.Type == ChangeReplaceChars
+	assert.True(t, isModification, "second diff: modification type")
+	assert.True(t, change.OldContent != "", "modification has old content")
+
+	secondGroups := GroupChanges(secondDiff.Changes)
+	assert.Equal(t, 1, len(secondGroups), "second diff: 1 group")
+	assert.Equal(t, "modification", secondGroups[0].Type, "second diff group: modification")
+	assert.NotNil(t, secondGroups[0].OldLines, "modification has old_lines")
+
+	// Key assertion: the two diffs produce different group types
+	assert.True(t, firstGroups[0].Type != secondGroups[0].Type,
+		"groups from different buffer states should differ")
+}
