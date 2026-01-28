@@ -17,6 +17,36 @@ import (
 	"cursortab/utils"
 )
 
+// Buffer defines the interface for buffer operations.
+// Implemented by buffer.NvimBuffer for Neovim integration.
+type Buffer interface {
+	Sync(workspacePath string) (*buffer.SyncResult, error)
+	Lines() []string
+	Row() int
+	Col() int
+	Path() string
+	Version() int
+	ViewportBounds() (top, bottom int)
+	PreviousLines() []string
+	OriginalLines() []string
+	DiffHistories() []*types.DiffEntry
+	SetFileContext(prev, orig []string, diffs []*types.DiffEntry)
+	HasChanges(startLine, endLineInc int, lines []string) bool
+	PrepareCompletion(startLine, endLineInc int, lines []string, groups []*text.Group) buffer.Batch
+	CommitPending()
+	ShowCursorTarget(line int) error
+	ClearUI() error
+	MoveCursor(line int, center, mark bool) error
+	LinterErrors() *types.LinterErrors
+	RegisterEventHandler(handler func(event string)) error
+}
+
+// Provider defines the interface that all AI providers must implement.
+// Implemented by autocomplete.Provider, sweep.Provider, zeta.Provider.
+type Provider interface {
+	GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error)
+}
+
 type state int
 
 const (
