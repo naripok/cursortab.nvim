@@ -75,6 +75,18 @@ func NewProvider(config *types.ProviderConfig) (*Provider, error) {
 // GetCompletion implements engine.Provider.GetCompletion for autocomplete
 // This provider only does end-of-line completion without cursor predictions
 func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error) {
+	// Skip completion if there's text after the cursor
+	if req.CursorRow >= 1 && req.CursorRow <= len(req.Lines) {
+		currentLine := req.Lines[req.CursorRow-1]
+		if req.CursorCol < len(currentLine) {
+			logger.Debug("autocomplete: skipping completion, text after cursor")
+			return &types.CompletionResponse{
+				Completions:  []*types.Completion{},
+				CursorTarget: nil,
+			}, nil
+		}
+	}
+
 	// Build the prompt from the file content up to the cursor position
 	prompt := p.buildPrompt(req)
 
