@@ -61,7 +61,7 @@ func CreateStages(
 	// Step 1: Partition changes by viewport visibility
 	var inViewChanges, outViewChanges []int
 	for lineNum, change := range diff.Changes {
-		bufferLine := getBufferLineForChange(change, lineNum, baseLineOffset, diff.LineMapping)
+		bufferLine := GetBufferLineForChange(change, lineNum, baseLineOffset, diff.LineMapping)
 
 		isVisible := viewportTop == 0 && viewportBottom == 0 ||
 			(bufferLine >= viewportTop && bufferLine <= viewportBottom)
@@ -111,8 +111,8 @@ func CreateStages(
 	}
 }
 
-// getBufferLineForChange calculates the buffer line for a change using the appropriate coordinate.
-func getBufferLineForChange(change LineChange, mapKey int, baseLineOffset int, mapping *LineMapping) int {
+// GetBufferLineForChange calculates the buffer line for a change using the appropriate coordinate.
+func GetBufferLineForChange(change LineChange, mapKey int, baseLineOffset int, mapping *LineMapping) int {
 	if change.OldLineNum > 0 {
 		return change.OldLineNum + baseLineOffset - 1
 	}
@@ -180,7 +180,7 @@ func groupChangesByProximity(diff *DiffResult, lineNumbers []int, proximityThres
 
 // clusterNeedsNavigation determines if a cluster requires cursor prediction UI.
 func clusterNeedsNavigation(cluster *ChangeCluster, cursorRow, viewportTop, viewportBottom, baseLineOffset int, diff *DiffResult, distThreshold int) bool {
-	bufferStart, bufferEnd := getClusterBufferRange(cluster, baseLineOffset, diff)
+	bufferStart, bufferEnd := getClusterBufferRange(cluster, baseLineOffset, diff, nil)
 
 	if viewportTop > 0 && viewportBottom > 0 {
 		entirelyOutside := bufferEnd < viewportTop || bufferStart > viewportBottom
@@ -195,7 +195,7 @@ func clusterNeedsNavigation(cluster *ChangeCluster, cursorRow, viewportTop, view
 
 // clusterDistanceFromCursor calculates the minimum distance from cursor to a cluster.
 func clusterDistanceFromCursor(cluster *ChangeCluster, cursorRow int, baseLineOffset int, diff *DiffResult) int {
-	bufferStartLine, bufferEndLine := getClusterBufferRange(cluster, baseLineOffset, diff)
+	bufferStartLine, bufferEndLine := getClusterBufferRange(cluster, baseLineOffset, diff, nil)
 
 	if cursorRow >= bufferStartLine && cursorRow <= bufferEndLine {
 		return 0
@@ -207,7 +207,8 @@ func clusterDistanceFromCursor(cluster *ChangeCluster, cursorRow int, baseLineOf
 }
 
 // getClusterBufferRange determines the buffer line range for a cluster using coordinate mapping.
-func getClusterBufferRange(cluster *ChangeCluster, baseLineOffset int, diff *DiffResult) (int, int) {
+// If bufferLines is non-nil, it will be populated with lineNum -> bufferLine mappings.
+func getClusterBufferRange(cluster *ChangeCluster, baseLineOffset int, diff *DiffResult, bufferLines map[int]int) (int, int) {
 	minOldLine := -1
 	maxOldLine := -1
 	minOldLineFromNonAdditions := -1
@@ -216,7 +217,10 @@ func getClusterBufferRange(cluster *ChangeCluster, baseLineOffset int, diff *Dif
 	maxNewLineNum := 0
 
 	for lineNum, change := range cluster.Changes {
-		bufferLine := getBufferLineForChange(change, lineNum, baseLineOffset, diff.LineMapping)
+		bufferLine := GetBufferLineForChange(change, lineNum, baseLineOffset, diff.LineMapping)
+		if bufferLines != nil {
+			bufferLines[lineNum] = bufferLine
+		}
 
 		isAddition := change.Type == ChangeAddition
 
@@ -318,8 +322,9 @@ func buildStagesFromClusters(clusters []*ChangeCluster, newLines []string, fileP
 	for i, cluster := range clusters {
 		isLastStage := i == len(clusters)-1
 
-		// Get buffer range for this cluster
-		bufferStart, bufferEnd := getClusterBufferRange(cluster, baseLineOffset, diff)
+		// Get buffer range and buffer line mappings for this cluster
+		lineNumToBufferLine := make(map[int]int)
+		bufferStart, bufferEnd := getClusterBufferRange(cluster, baseLineOffset, diff, lineNumToBufferLine)
 
 		// Get new line range for content extraction
 		newStartLine, newEndLine := getClusterNewLineRange(cluster)
@@ -332,28 +337,26 @@ func buildStagesFromClusters(clusters []*ChangeCluster, newLines []string, fileP
 			}
 		}
 
-		// Extract old content for modifications
+		// Extract old content for modifications and create remapped changes
 		stageOldLines := make([]string, len(stageLines))
-		for lineNum, change := range cluster.Changes {
-			newLineNum := lineNum
-			if change.NewLineNum > 0 {
-				newLineNum = change.NewLineNum
-			}
-			relativeIdx := newLineNum - newStartLine
-			if relativeIdx >= 0 && relativeIdx < len(stageOldLines) {
-				stageOldLines[relativeIdx] = change.OldContent
-			}
-		}
-
-		// Create remapped changes with line numbers relative to stage content
 		remappedChanges := make(map[int]LineChange)
+		relativeToBufferLine := make(map[int]int)
 		for lineNum, change := range cluster.Changes {
 			newLineNum := lineNum
 			if change.NewLineNum > 0 {
 				newLineNum = change.NewLineNum
 			}
 			relativeLine := newLineNum - newStartLine + 1
+			relativeIdx := newLineNum - newStartLine
+
+			if relativeIdx >= 0 && relativeIdx < len(stageOldLines) {
+				stageOldLines[relativeIdx] = change.OldContent
+			}
+
 			if relativeLine > 0 && relativeLine <= len(stageLines) {
+				// Use pre-computed buffer line from getClusterBufferRange
+				relativeToBufferLine[relativeLine] = lineNumToBufferLine[lineNum]
+
 				remappedChange := change
 				remappedChange.NewLineNum = relativeLine
 				remappedChanges[relativeLine] = remappedChange
@@ -362,20 +365,49 @@ func buildStagesFromClusters(clusters []*ChangeCluster, newLines []string, fileP
 
 		// Compute groups and cursor position using the grouping module
 		groups := GroupChanges(remappedChanges)
+
+		// Find the last modification's relative line number to determine which additions are "after"
+		lastModificationLine := 0
+		modificationBufferLine := bufferStart
+		for relativeLine, change := range remappedChanges {
+			if change.Type == ChangeModification || change.Type == ChangeAppendChars ||
+				change.Type == ChangeDeleteChars || change.Type == ChangeReplaceChars {
+				if relativeLine > lastModificationLine {
+					lastModificationLine = relativeLine
+					if bufLine, ok := relativeToBufferLine[relativeLine]; ok {
+						modificationBufferLine = bufLine
+					}
+				}
+			}
+		}
+
+		// Set buffer line for each group
+		// - Modifications and additions before: use the anchor buffer line
+		// - Additions after all modifications: use anchor + 1 (so virt_lines_above renders below the modification)
+		for _, g := range groups {
+			if g.Type == "addition" && lastModificationLine > 0 && g.StartLine > lastModificationLine {
+				// Addition after the last modification - render below
+				g.BufferLine = modificationBufferLine + 1
+			} else if bufLine, ok := relativeToBufferLine[g.StartLine]; ok {
+				g.BufferLine = bufLine
+			} else {
+				g.BufferLine = bufferStart + g.StartLine - 1
+			}
+		}
+
 		cursorLine, cursorCol := CalculateCursorPosition(remappedChanges, stageLines)
 
 		// Create cursor target
 		var cursorTarget *types.CursorPredictionTarget
 		if isLastStage {
-			_, bufferEndLine := getClusterBufferRange(cluster, baseLineOffset, diff)
 			cursorTarget = &types.CursorPredictionTarget{
 				RelativePath:    filePath,
-				LineNumber:      int32(bufferEndLine),
+				LineNumber:      int32(bufferEnd),
 				ShouldRetrigger: true,
 			}
 		} else {
 			nextCluster := clusters[i+1]
-			nextBufferStart, _ := getClusterBufferRange(nextCluster, baseLineOffset, diff)
+			nextBufferStart, _ := getClusterBufferRange(nextCluster, baseLineOffset, diff, nil)
 			cursorTarget = &types.CursorPredictionTarget{
 				RelativePath:    filePath,
 				LineNumber:      int32(nextBufferStart),

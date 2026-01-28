@@ -52,6 +52,7 @@ local completion_windows = {} -- Array of {win_id, buf_id} for overlay window cl
 ---@field type string "modification" | "addition" | "deletion"
 ---@field start_line integer 1-indexed, relative to diff content
 ---@field end_line integer 1-indexed, inclusive
+---@field buffer_line integer 1-indexed absolute buffer position for rendering
 ---@field lines string[] New content
 ---@field old_lines string[] Old content (modifications only)
 ---@field render_hint string|nil "append_chars" | "replace_chars" | "delete_chars" | nil
@@ -60,8 +61,7 @@ local completion_windows = {} -- Array of {win_id, buf_id} for overlay window cl
 
 ---@class DiffResult
 ---@field groups Group[] Array of groups for rendering
----@field startLine integer Start line of the buffer range (1-indexed)
----@field endLineInclusive integer End line of the buffer range (1-indexed, inclusive)
+---@field startLine integer Start line of the buffer range (1-indexed, used for apply operation)
 ---@field cursor_line integer Cursor position (1-indexed, relative to content)
 ---@field cursor_col integer Cursor column (0-indexed)
 
@@ -293,11 +293,10 @@ end
 -- Render append_chars: show only the appended part as ghost text
 ---@param group Group
 ---@param nvim_line integer 0-indexed line number
----@param absolute_line_num integer 1-indexed absolute line number
 ---@param current_buf integer
 ---@param is_first_append boolean
 ---@return boolean was_first_append True if this was stored as the first append_chars
-local function render_append_chars(group, nvim_line, absolute_line_num, current_buf, is_first_append)
+local function render_append_chars(group, nvim_line, current_buf, is_first_append)
 	local content = group.lines[1] or ""
 	local col_start = group.col_start or 0
 	local appended_text = string.sub(content, col_start + 1)
@@ -305,7 +304,7 @@ local function render_append_chars(group, nvim_line, absolute_line_num, current_
 	-- Store expected line state for partial typing optimization (only first append_chars)
 	if is_first_append then
 		expected_line = content
-		expected_line_num = absolute_line_num
+		expected_line_num = group.buffer_line
 		original_len = col_start
 	end
 
@@ -384,9 +383,10 @@ end
 -- Render single-line modification: highlight old line, show new content to the right
 ---@param group Group
 ---@param nvim_line integer 0-indexed line number
+---@param virt_line_offset integer Number of virtual lines added above this point
 ---@param current_win integer
 ---@param current_buf integer
-local function render_single_modification(group, nvim_line, current_win, current_buf)
+local function render_single_modification(group, nvim_line, virt_line_offset, current_win, current_buf)
 	local line_content = vim.api.nvim_buf_get_lines(current_buf, nvim_line, nvim_line + 1, false)[1] or ""
 	local syntax_ft = vim.api.nvim_get_option_value("filetype", { buf = current_buf })
 	local content = group.lines[1] or ""
@@ -401,35 +401,37 @@ local function render_single_modification(group, nvim_line, current_win, current
 		table.insert(completion_extmarks, { buf = current_buf, extmark_id = extmark_id })
 	end
 
-	-- Create side-by-side overlay window to the right
+	-- Create side-by-side overlay window to the right (offset by virtual lines)
 	if content ~= "" then
 		local line_width = vim.fn.strdisplaywidth(line_content)
 		local overlay_win, overlay_buf, _ =
-			create_overlay_window(current_win, nvim_line, line_width + 2, content, syntax_ft, "cursortabhl_modification", nil)
+			create_overlay_window(current_win, nvim_line + virt_line_offset, line_width + 2, content, syntax_ft, "cursortabhl_modification", nil)
 		table.insert(completion_windows, { win_id = overlay_win, buf_id = overlay_buf })
 	end
 end
 
 -- Render multi-line modification group: overlay each line
 ---@param group Group
----@param buffer_start integer 1-indexed buffer start line
+---@param virt_line_offset integer Number of virtual lines added above this point
 ---@param current_win integer
 ---@param current_buf integer
-local function render_modification_group(group, buffer_start, current_win, current_buf)
+local function render_modification_group(group, virt_line_offset, current_win, current_buf)
 	local syntax_ft = vim.api.nvim_get_option_value("filetype", { buf = current_buf })
 
 	for i, new_line_content in ipairs(group.lines) do
-		local group_relative_line = group.start_line + i - 1
-		local abs_line_num = buffer_start + group_relative_line - 1
-		local line_nvim = abs_line_num - 1
+		-- buffer_line is the first line; add offset for subsequent lines
+		local line_nvim = group.buffer_line + i - 2 -- 0-indexed
 
 		local original_content = vim.api.nvim_buf_get_lines(current_buf, line_nvim, line_nvim + 1, false)[1] or ""
 		local original_width = vim.fn.strdisplaywidth(original_content)
 
+		-- Add virt_line_offset for overlay positioning
+		local overlay_nvim_line = line_nvim + virt_line_offset
+
 		if new_line_content and new_line_content ~= "" then
 			local overlay_win, overlay_buf, _ = create_overlay_window(
 				current_win,
-				line_nvim,
+				overlay_nvim_line,
 				0,
 				new_line_content,
 				syntax_ft,
@@ -441,7 +443,7 @@ local function render_modification_group(group, buffer_start, current_win, curre
 			-- Show deletion indicator for empty replacement
 			local overlay_win, overlay_buf, _ = create_overlay_window(
 				current_win,
-				line_nvim,
+				overlay_nvim_line,
 				0,
 				string.rep(" ", original_width),
 				nil,
@@ -453,19 +455,16 @@ local function render_modification_group(group, buffer_start, current_win, curre
 	end
 end
 
--- Render single-line addition: virtual line + overlay
+-- Render single-line addition: virtual line + overlay window
 ---@param group Group
 ---@param nvim_line integer 0-indexed line number
----@param addition_offset integer Current addition offset
+---@param virt_line_offset integer Number of virtual lines added above this point
 ---@param current_win integer
 ---@param current_buf integer
----@return integer new_addition_offset
-local function render_single_addition(group, nvim_line, addition_offset, current_win, current_buf)
+local function render_single_addition(group, nvim_line, virt_line_offset, current_win, current_buf)
 	local syntax_ft = vim.api.nvim_get_option_value("filetype", { buf = current_buf })
 	local buf_line_count = vim.api.nvim_buf_line_count(current_buf)
 	local content = group.lines[1] or ""
-
-	local adjusted_nvim_line = math.max(0, nvim_line - addition_offset)
 
 	local virtual_extmark_id
 	local overlay_line
@@ -475,13 +474,13 @@ local function render_single_addition(group, nvim_line, addition_offset, current
 			virt_lines = { { { "", "Normal" } } },
 			virt_lines_above = false,
 		})
-		overlay_line = buf_line_count
+		overlay_line = buf_line_count + virt_line_offset
 	else
-		virtual_extmark_id = vim.api.nvim_buf_set_extmark(current_buf, daemon.get_namespace_id(), adjusted_nvim_line, 0, {
+		virtual_extmark_id = vim.api.nvim_buf_set_extmark(current_buf, daemon.get_namespace_id(), nvim_line, 0, {
 			virt_lines = { { { "", "Normal" } } },
 			virt_lines_above = true,
 		})
-		overlay_line = adjusted_nvim_line
+		overlay_line = nvim_line + virt_line_offset
 	end
 	table.insert(completion_extmarks, { buf = current_buf, extmark_id = virtual_extmark_id })
 
@@ -490,27 +489,22 @@ local function render_single_addition(group, nvim_line, addition_offset, current
 			create_overlay_window(current_win, overlay_line, 0, content, syntax_ft, "cursortabhl_addition", nil)
 		table.insert(completion_windows, { win_id = overlay_win, buf_id = overlay_buf })
 	end
-
-	return addition_offset + 1
 end
 
--- Render multi-line addition group: virtual lines + single overlay
+-- Render multi-line addition group: virtual lines + overlay window
 ---@param group Group
----@param buffer_start integer 1-indexed buffer start line
----@param addition_offset integer Current addition offset
+---@param virt_line_offset integer Number of virtual lines added above this point
 ---@param current_win integer
 ---@param current_buf integer
----@return integer new_addition_offset
-local function render_addition_group(group, buffer_start, addition_offset, current_win, current_buf)
+local function render_addition_group(group, virt_line_offset, current_win, current_buf)
 	local syntax_ft = vim.api.nvim_get_option_value("filetype", { buf = current_buf })
 	local buf_line_count = vim.api.nvim_buf_line_count(current_buf)
 	local line_count = group.end_line - group.start_line + 1
 
-	local first_addition_line = buffer_start + group.start_line - 1
-	local first_virtual_line = first_addition_line - 1
-	local adjusted_first_virtual_line = math.max(0, first_virtual_line - addition_offset)
+	-- buffer_line is 1-indexed; convert to 0-indexed for nvim API
+	local nvim_line = group.buffer_line - 1
 
-	-- Create virtual lines for the entire group
+	-- Create empty virtual lines as placeholders
 	local virt_lines_array = {}
 	for _ = 1, line_count do
 		table.insert(virt_lines_array, { { "", "Normal" } })
@@ -518,31 +512,29 @@ local function render_addition_group(group, buffer_start, addition_offset, curre
 
 	local virtual_extmark_id
 	local overlay_line
-	if first_virtual_line >= buf_line_count then
+	if nvim_line >= buf_line_count then
 		local last_existing_line = buf_line_count - 1
 		virtual_extmark_id = vim.api.nvim_buf_set_extmark(current_buf, daemon.get_namespace_id(), last_existing_line, 0, {
 			virt_lines = virt_lines_array,
 			virt_lines_above = false,
 		})
-		overlay_line = buf_line_count
+		overlay_line = buf_line_count + virt_line_offset
 	else
 		virtual_extmark_id =
-			vim.api.nvim_buf_set_extmark(current_buf, daemon.get_namespace_id(), adjusted_first_virtual_line, 0, {
+			vim.api.nvim_buf_set_extmark(current_buf, daemon.get_namespace_id(), nvim_line, 0, {
 				virt_lines = virt_lines_array,
 				virt_lines_above = true,
 			})
-		overlay_line = adjusted_first_virtual_line
+		overlay_line = nvim_line + virt_line_offset
 	end
 	table.insert(completion_extmarks, { buf = current_buf, extmark_id = virtual_extmark_id })
 
-	-- Single overlay window for all lines
+	-- Create overlay window for syntax-highlighted content
 	if #group.lines > 0 then
 		local overlay_win, overlay_buf, _ =
 			create_overlay_window(current_win, overlay_line, 0, group.lines, syntax_ft, "cursortabhl_addition", nil)
 		table.insert(completion_windows, { win_id = overlay_win, buf_id = overlay_buf })
 	end
-
-	return addition_offset + line_count
 end
 
 -- Render line deletion: highlight the entire line
@@ -582,23 +574,21 @@ local function show_completion(diff_result)
 		return
 	end
 
-	local buffer_start = diff_result.startLine or 1
-	local addition_offset = 0
 	local found_first_append = false
+	local virt_line_offset = 0 -- Track cumulative virtual lines for overlay positioning
 
 	-- Process each group in order (groups are already sorted by start_line from Go)
 	for _, group in ipairs(diff_result.groups or {}) do
 		local is_single_line = group.start_line == group.end_line
 
-		-- Calculate absolute buffer line for this group's start
-		local abs_start_line = buffer_start + group.start_line - 1
-		local nvim_line = abs_start_line - 1 -- 0-indexed for nvim API
+		-- Use buffer_line directly (1-indexed absolute buffer position computed by Go)
+		local nvim_line = group.buffer_line - 1 -- 0-indexed for nvim API
 
 		-- Handle character-level render hints (single-line only)
 		if is_single_line and group.render_hint and group.render_hint ~= "" then
 			if group.render_hint == "append_chars" then
 				local is_first = not found_first_append
-				render_append_chars(group, nvim_line, abs_start_line, current_buf, is_first)
+				render_append_chars(group, nvim_line, current_buf, is_first)
 				if is_first then
 					found_first_append = true
 				end
@@ -609,16 +599,19 @@ local function show_completion(diff_result)
 			end
 		elseif group.type == "modification" then
 			if is_single_line then
-				render_single_modification(group, nvim_line, current_win, current_buf)
+				render_single_modification(group, nvim_line, virt_line_offset, current_win, current_buf)
 			else
-				render_modification_group(group, buffer_start, current_win, current_buf)
+				render_modification_group(group, virt_line_offset, current_win, current_buf)
 			end
 		elseif group.type == "addition" then
+			local line_count = group.end_line - group.start_line + 1
 			if is_single_line then
-				addition_offset = render_single_addition(group, nvim_line, addition_offset, current_win, current_buf)
+				render_single_addition(group, nvim_line, virt_line_offset, current_win, current_buf)
 			else
-				addition_offset = render_addition_group(group, buffer_start, addition_offset, current_win, current_buf)
+				render_addition_group(group, virt_line_offset, current_win, current_buf)
 			end
+			-- Update offset for subsequent overlays
+			virt_line_offset = virt_line_offset + line_count
 		elseif group.type == "deletion" then
 			-- Deletions are always rendered per-line within the group
 			for i = 1, (group.end_line - group.start_line + 1) do

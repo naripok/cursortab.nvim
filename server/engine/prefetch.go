@@ -156,15 +156,13 @@ func (e *Engine) tryShowPrefetchedCompletion() bool {
 	e.syncBuffer()
 
 	comp := e.prefetchedCompletions[0]
-	cursorTarget := e.prefetchedCursorTarget
 
 	// Clear prefetch state before processing
 	e.prefetchedCompletions = nil
 	e.prefetchedCursorTarget = nil
 	e.prefetchState = prefetchNone
 
-	// Use unified processCompletion for all completion handling (including staging)
-	return e.processCompletion(comp, cursorTarget)
+	return e.processCompletion(comp)
 }
 
 // handlePrefetchError processes a prefetch error
@@ -197,15 +195,13 @@ func (e *Engine) handleDeferredCursorTarget() {
 		e.syncBuffer()
 
 		comp := e.prefetchedCompletions[0]
-		cursorTarget := e.prefetchedCursorTarget
 
 		// Clear prefetch state before processing
 		e.prefetchedCompletions = nil
 		e.prefetchedCursorTarget = nil
 		e.prefetchState = prefetchNone
 
-		// Use unified processCompletion for all completion handling (including staging)
-		if e.processCompletion(comp, cursorTarget) {
+		if e.processCompletion(comp) {
 			return
 		}
 
@@ -238,15 +234,13 @@ func (e *Engine) usePrefetchedCompletion() bool {
 	e.syncBuffer()
 
 	comp := e.prefetchedCompletions[0]
-	cursorTarget := e.prefetchedCursorTarget
 
 	// Clear prefetch state before processing
 	e.prefetchedCompletions = nil
 	e.prefetchedCursorTarget = nil
 	e.prefetchState = prefetchNone
 
-	// Use unified processCompletion for all completion handling (including staging)
-	if e.processCompletion(comp, cursorTarget) {
+	if e.processCompletion(comp) {
 		return true
 	}
 

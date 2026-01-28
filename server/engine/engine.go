@@ -84,9 +84,9 @@ type Engine struct {
 	WorkspacePath string
 	WorkspaceID   string
 
-	provider Provider
-	buffer   Buffer
-	clock    Clock
+	provider        Provider
+	buffer          Buffer
+	clock           Clock
 	state           state
 	ctx             context.Context
 	currentCancel   context.CancelFunc
@@ -387,7 +387,6 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 	}
 	return false
 }
-
 
 func (e *Engine) reject() {
 	e.clearState(ClearOptions{
@@ -893,7 +892,7 @@ func (e *Engine) getStage(idx int) *text.Stage {
 // It handles diff analysis, staging decisions, and showing completions.
 // Called from both fresh completion responses and prefetch paths.
 // Returns true if completion was processed successfully, false if no changes.
-func (e *Engine) processCompletion(completion *types.Completion, cursorTarget *types.CursorPredictionTarget) bool {
+func (e *Engine) processCompletion(completion *types.Completion) bool {
 	if completion == nil {
 		return false
 	}
@@ -921,17 +920,7 @@ func (e *Engine) processCompletion(completion *types.Completion, cursorTarget *t
 		completion.StartLine,
 	)
 
-	// Resolve cursor target (use provided or create auto-advance target)
-	resolvedCursorTarget := cursorTarget
-	if resolvedCursorTarget == nil && e.config.CursorPrediction.AutoAdvance && e.config.CursorPrediction.Enabled {
-		resolvedCursorTarget = &types.CursorPredictionTarget{
-			RelativePath:    e.buffer.Path(),
-			LineNumber:      int32(completion.EndLineInc),
-			ShouldRetrigger: true,
-		}
-	}
-
-	// Try staging - CreateStages handles all viewport/distance logic and returns:
+	// Create stages - CreateStages handles all viewport/distance logic and returns:
 	// - nil: no staging needed (single visible+close cluster or no changes)
 	// - StagingResult with FirstNeedsNavigation: whether to show cursor prediction UI
 	stagingResult := text.CreateStages(
@@ -975,16 +964,8 @@ func (e *Engine) processCompletion(completion *types.Completion, cursorTarget *t
 		return true
 	}
 
-	// No staging - show as single completion
-	e.state = stateHasCompletion
-	e.completions = []*types.Completion{completion}
-	e.cursorTarget = resolvedCursorTarget
-	e.applyBatch = e.buffer.PrepareCompletion(completion.StartLine, completion.EndLineInc, completion.Lines, nil)
-
-	// Store original buffer lines for partial typing optimization
-	e.completionOriginalLines = originalLines
-
-	return true
+	// No staging means no changes to show
+	return false
 }
 
 // RegisterEventHandler registers the event handler for nvim RPC callbacks.

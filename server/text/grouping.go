@@ -10,6 +10,10 @@ type Group struct {
 	Lines     []string // New content
 	OldLines  []string // Old content (modifications only)
 
+	// BufferLine is the 1-indexed absolute buffer position for rendering.
+	// Computed by staging.go using GetBufferLineForChange for correct coordinate mapping.
+	BufferLine int
+
 	// Character-level rendering hints (single-line only)
 	RenderHint string // "", "append_chars", "replace_chars", "delete_chars"
 	ColStart   int    // For character-level changes

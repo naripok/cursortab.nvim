@@ -199,7 +199,7 @@ func (e *Engine) handleCompletionReadyImpl(response *types.CompletionResponse) {
 	completion := response.Completions[0]
 
 	// Use unified processCompletion for all completion handling
-	if e.processCompletion(completion, response.CursorTarget) {
+	if e.processCompletion(completion) {
 		if len(response.Completions) > 1 {
 			logger.Debug("multiple completions: %v", response.Completions)
 		}

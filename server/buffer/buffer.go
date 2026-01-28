@@ -282,15 +282,12 @@ func (b *NvimBuffer) PrepareCompletion(startLine, endLineInc int, lines []string
 		originalLines = append(originalLines, b.lines[i-1])
 	}
 
-	// Always compute groups from fresh diff (pre-computed groups may be stale)
-	if len(diffResult.Changes) > 0 {
-		groups = text.GroupChanges(diffResult.Changes)
-	}
+	// Groups are pre-computed by staging with BufferLine already set
 
 	applyBatch := b.getApplyBatch(startLine, endLineInc, lines, diffResult)
 
 	// Convert to Lua format
-	luaDiffResult := diffResultToLuaFormat(diffResult, groups, lines, startLine, endLineInc)
+	luaDiffResult := diffResultToLuaFormat(diffResult, groups, lines, startLine)
 
 	// Debug logging for data sent to Lua
 	if jsonData, err := json.Marshal(luaDiffResult); err == nil {
@@ -592,7 +589,7 @@ func (b *NvimBuffer) clearNamespace(batch *nvim.Batch, nsID int) {
 }
 
 // diffResultToLuaFormat converts diff result and groups to a format suitable for Lua rendering
-func diffResultToLuaFormat(diffResult *text.DiffResult, groups []*text.Group, newLines []string, startLine, endLineInclusive int) map[string]any {
+func diffResultToLuaFormat(diffResult *text.DiffResult, groups []*text.Group, newLines []string, startLine int) map[string]any {
 	// Compute cursor position
 	cursorLine, cursorCol := text.CalculateCursorPosition(diffResult.Changes, newLines)
 
@@ -600,11 +597,12 @@ func diffResultToLuaFormat(diffResult *text.DiffResult, groups []*text.Group, ne
 	var luaGroups []map[string]any
 	for _, g := range groups {
 		luaGroup := map[string]any{
-			"type":       g.Type,
-			"start_line": g.StartLine,
-			"end_line":   g.EndLine,
-			"lines":      g.Lines,
-			"old_lines":  g.OldLines,
+			"type":        g.Type,
+			"start_line":  g.StartLine,
+			"end_line":    g.EndLine,
+			"buffer_line": g.BufferLine,
+			"lines":       g.Lines,
+			"old_lines":   g.OldLines,
 		}
 
 		// Add render hint for character-level optimizations
@@ -618,11 +616,10 @@ func diffResultToLuaFormat(diffResult *text.DiffResult, groups []*text.Group, ne
 	}
 
 	return map[string]any{
-		"startLine":        startLine,
-		"endLineInclusive": endLineInclusive,
-		"groups":           luaGroups,
-		"cursor_line":      cursorLine,
-		"cursor_col":       cursorCol,
+		"startLine":   startLine,
+		"groups":      luaGroups,
+		"cursor_line": cursorLine,
+		"cursor_col":  cursorCol,
 	}
 }
 

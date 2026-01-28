@@ -597,7 +597,7 @@ func TestGetBufferLineForChange_Insertion(t *testing.T) {
 		OldLineNum: -1, // pure insertion
 	}
 
-	bufferLine := getBufferLineForChange(change, 2, 1, mapping)
+	bufferLine := GetBufferLineForChange(change, 2, 1, mapping)
 
 	// Should find old line 1 as anchor (the mapped line before insertion)
 	assert.Equal(t, 1, bufferLine, "buffer line for insertion (anchor)")
@@ -616,7 +616,7 @@ func TestGetBufferLineForChange_Modification(t *testing.T) {
 		OldLineNum: 2,
 	}
 
-	bufferLine := getBufferLineForChange(change, 2, 10, mapping)
+	bufferLine := GetBufferLineForChange(change, 2, 10, mapping)
 
 	// baseLineOffset=10, oldLineNum=2: 2 + 10 - 1 = 11
 	assert.Equal(t, 11, bufferLine, "buffer line for modification")
@@ -641,7 +641,7 @@ func TestGetClusterBufferRange_WithInsertions(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	start, end := getClusterBufferRange(cluster, 1, diff)
+	start, end := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// Both insertions anchor to line 1, so range should be 1-1
 	assert.True(t, start <= end, fmt.Sprintf("invalid range: start=%d > end=%d", start, end))
@@ -664,7 +664,7 @@ func TestGetBufferLineForChange_DeletionAtLine1(t *testing.T) {
 		NewLineNum: -1, // no new line for deletions
 	}
 
-	bufferLine := getBufferLineForChange(change, 1, 1, mapping)
+	bufferLine := GetBufferLineForChange(change, 1, 1, mapping)
 
 	// Should use OldLineNum directly: 1 + 1 - 1 = 1
 	assert.Equal(t, 1, bufferLine, "buffer line for deletion at line 1")
@@ -683,7 +683,7 @@ func TestGetBufferLineForChange_InsertionWithNoAnchor(t *testing.T) {
 		OldLineNum: -1, // pure insertion
 	}
 
-	bufferLine := getBufferLineForChange(change, 1, 1, mapping)
+	bufferLine := GetBufferLineForChange(change, 1, 1, mapping)
 
 	// No anchor found, should fallback to mapKey: 1 + 1 - 1 = 1
 	assert.Equal(t, 1, bufferLine, "buffer line for insertion at line 1 with no anchor")
@@ -786,7 +786,7 @@ func TestGetClusterBufferRange_AllInsertions(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	start, end := getClusterBufferRange(cluster, 1, diff)
+	start, end := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// Pure additions with valid anchors (from mapping) use insertion point (anchor + 1).
 	// The mapping shows these insertions are anchored to old line 1, so insertion point is 2.
@@ -889,7 +889,7 @@ func TestGetClusterBufferRange_AdditionsAtEndOfFile(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 1, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 1, diff, nil)
 
 	assert.Equal(t, 8, startLine, "buffer start line")
 	assert.Equal(t, 10, endLine, "buffer end line should extend to end of original buffer")
@@ -920,7 +920,7 @@ func TestGetClusterBufferRange_AdditionsWithinBuffer(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 1, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// Pure additions with anchor at line 4: insertion point is anchor + 1 = 5
 	assert.Equal(t, 5, startLine, "buffer start line is insertion point (anchor + 1)")
@@ -1007,7 +1007,7 @@ func TestGetClusterBufferRange_AdditionsAnchoredBeforeModifications(t *testing.T
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 1, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// StartLine should be 43 (first modification), NOT 42 (anchor of additions)
 	assert.Equal(t, 43, startLine,
@@ -1038,7 +1038,7 @@ func TestGetClusterBufferRange_OnlyAdditionsWithAnchor(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 1, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// Pure additions with anchor at line 10: insertion point is anchor + 1 = 11
 	assert.Equal(t, 11, startLine, "buffer start should be insertion point (anchor + 1)")
@@ -1067,7 +1067,7 @@ func TestGetClusterBufferRange_OnlyAdditionsBeyondBuffer(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 1, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// Pure additions with anchor at line 10: insertion point is anchor + 1 = 11
 	assert.Equal(t, 11, startLine, "buffer start should be insertion point (anchor + 1)")
@@ -1153,7 +1153,7 @@ func TestGetClusterBufferRange_AllAdditionsNoValidAnchor(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 1, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 1, diff, nil)
 
 	// Should fall back to cluster.StartLine + baseLineOffset - 1 = 5 + 1 - 1 = 5
 	assert.Equal(t, 5, startLine, "should fallback to cluster.StartLine")
@@ -1178,7 +1178,7 @@ func TestGetClusterBufferRange_BaseLineOffsetZero(t *testing.T) {
 		Changes:   diff.Changes,
 	}
 
-	startLine, endLine := getClusterBufferRange(cluster, 0, diff)
+	startLine, endLine := getClusterBufferRange(cluster, 0, diff, nil)
 
 	// With baseLineOffset=0: bufferLine = 5 + 0 - 1 = 4
 	assert.Equal(t, 4, startLine, "buffer start with offset 0")
