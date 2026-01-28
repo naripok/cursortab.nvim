@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 jobs:
   test:
@@ -64,9 +64,7 @@ jobs:
             print_section "Breaking Changes" "[a-z]+(\(.+\))?!:"
             print_section "Features" "feat(\(.+\))?:"
             print_section "Bug Fixes" "fix(\(.+\))?:"
-            print_section "Refactor" "refactor(\(.+\))?:"
-            print_section "Documentation" "docs(\(.+\))?:"
-            print_section "Other Changes" "(perf|chore|test|ci)(\(.+\))?:"
+            print_section "Other Changes" "(refactor|docs|perf|chore|test|ci)(\(.+\))?:"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
