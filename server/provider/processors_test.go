@@ -4,8 +4,128 @@ import (
 	"cursortab/assert"
 	"cursortab/client/openai"
 	"cursortab/types"
+	"strings"
 	"testing"
 )
+
+// --- Diff History Processor Tests ---
+
+func TestDiffEntryToUnifiedDiff(t *testing.T) {
+	tests := []struct {
+		name     string
+		original string
+		updated  string
+		want     string
+	}{
+		{
+			name:     "no change",
+			original: "same",
+			updated:  "same",
+			want:     "",
+		},
+		{
+			name:     "single line change",
+			original: "old",
+			updated:  "new",
+			want:     "@@ -1,1 +1,1 @@\n-old\n+new",
+		},
+		{
+			name:     "multi line change",
+			original: "line 1\nline 2",
+			updated:  "line 1\nmodified",
+			want:     "@@ -1,2 +1,2 @@\n-line 1\n-line 2\n+line 1\n+modified",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := &types.DiffEntry{Original: tt.original, Updated: tt.updated}
+			got := DiffEntryToUnifiedDiff(entry)
+			assert.Equal(t, tt.want, got, "DiffEntryToUnifiedDiff result")
+		})
+	}
+}
+
+func TestFormatDiffHistory_Unified(t *testing.T) {
+	processor := FormatDiffHistory(DiffHistoryOptions{
+		HeaderTemplate: "User edited %q:\n",
+		Prefix:         "```diff\n",
+		Suffix:         "\n```",
+		Separator:      "\n\n",
+	})
+
+	history := []*types.FileDiffHistory{
+		{
+			FileName: "test.go",
+			DiffHistory: []*types.DiffEntry{
+				{Original: "old line", Updated: "new line"},
+			},
+		},
+	}
+
+	result := processor(history)
+	assert.True(t, strings.Contains(result, "User edited \"test.go\""), "should have file name")
+	assert.True(t, strings.Contains(result, "```diff"), "should have diff block")
+	assert.True(t, strings.Contains(result, "-old line"), "should have removed line")
+	assert.True(t, strings.Contains(result, "+new line"), "should have added line")
+}
+
+func TestFormatDiffHistory_NoPrefix(t *testing.T) {
+	processor := FormatDiffHistory(DiffHistoryOptions{
+		HeaderTemplate: "<|file_sep|>%s.diff\n",
+		Prefix:         "",
+		Suffix:         "\n",
+		Separator:      "",
+	})
+
+	history := []*types.FileDiffHistory{
+		{
+			FileName: "test.go",
+			DiffHistory: []*types.DiffEntry{
+				{Original: "old line", Updated: "new line"},
+			},
+		},
+	}
+
+	result := processor(history)
+	assert.True(t, strings.Contains(result, "<|file_sep|>test.go.diff"), "should have file separator")
+	assert.True(t, strings.Contains(result, "-old line"), "should have removed line")
+	assert.True(t, strings.Contains(result, "+new line"), "should have added line")
+}
+
+func TestFormatDiffHistoryOriginalUpdated(t *testing.T) {
+	processor := FormatDiffHistoryOriginalUpdated("<|file_sep|>%s.diff\n")
+
+	history := []*types.FileDiffHistory{
+		{
+			FileName: "test.go",
+			DiffHistory: []*types.DiffEntry{
+				{Original: "old line", Updated: "new line"},
+			},
+		},
+	}
+
+	result := processor(history)
+	assert.True(t, strings.Contains(result, "<|file_sep|>test.go.diff"), "should have file separator")
+	assert.True(t, strings.Contains(result, "original:\nold line"), "should have original section")
+	assert.True(t, strings.Contains(result, "updated:\nnew line"), "should have updated section")
+}
+
+func TestFormatDiffHistoryOriginalUpdated_NoChange(t *testing.T) {
+	processor := FormatDiffHistoryOriginalUpdated("<|file_sep|>%s.diff\n")
+
+	history := []*types.FileDiffHistory{
+		{
+			FileName: "test.go",
+			DiffHistory: []*types.DiffEntry{
+				{Original: "same content", Updated: "same content"},
+			},
+		},
+	}
+
+	result := processor(history)
+	assert.Equal(t, "", result, "should be empty when original equals updated")
+}
 
 // --- Preprocessor Tests ---
 

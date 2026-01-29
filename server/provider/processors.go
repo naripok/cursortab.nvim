@@ -7,6 +7,7 @@ import (
 	"cursortab/types"
 	"cursortab/utils"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -24,6 +25,119 @@ type Postprocessor func(p *Provider, ctx *Context) (*types.CompletionResponse, b
 // ErrSkipCompletion is a sentinel error that preprocessors return to skip
 // completion without treating it as an error.
 var ErrSkipCompletion = errors.New("skip completion")
+
+// --- Diff History Processors ---
+
+// DiffHistoryOptions defines how diff history should be formatted
+type DiffHistoryOptions struct {
+	HeaderTemplate string // e.g. "User edited %q:\n"
+	Prefix         string // e.g. "```diff\n"
+	Suffix         string // e.g. "\n```"
+	Separator      string // e.g. "\n\n"
+}
+
+// FormatDiffHistory returns a processor that formats diff history according to the specified options
+func FormatDiffHistory(opts DiffHistoryOptions) DiffHistoryBuilder {
+	return func(history []*types.FileDiffHistory) string {
+		if len(history) == 0 {
+			return ""
+		}
+
+		var builder strings.Builder
+		firstEdit := true
+
+		for _, fileHistory := range history {
+			if len(fileHistory.DiffHistory) == 0 {
+				continue
+			}
+
+			for _, diffEntry := range fileHistory.DiffHistory {
+				unifiedDiff := DiffEntryToUnifiedDiff(diffEntry)
+				if unifiedDiff == "" {
+					continue
+				}
+
+				if !firstEdit && opts.Separator != "" {
+					builder.WriteString(opts.Separator)
+				}
+				firstEdit = false
+
+				if opts.HeaderTemplate != "" {
+					fmt.Fprintf(&builder, opts.HeaderTemplate, fileHistory.FileName)
+				}
+				builder.WriteString(opts.Prefix)
+				builder.WriteString(unifiedDiff)
+				builder.WriteString(opts.Suffix)
+			}
+		}
+
+		return builder.String()
+	}
+}
+
+// FormatDiffHistoryOriginalUpdated returns a processor that formats diff history
+// using simple original/updated sections instead of unified diff format.
+func FormatDiffHistoryOriginalUpdated(headerTemplate string) DiffHistoryBuilder {
+	return func(history []*types.FileDiffHistory) string {
+		if len(history) == 0 {
+			return ""
+		}
+
+		var builder strings.Builder
+
+		for _, fileHistory := range history {
+			if len(fileHistory.DiffHistory) == 0 {
+				continue
+			}
+
+			for _, diffEntry := range fileHistory.DiffHistory {
+				if diffEntry.Original == diffEntry.Updated {
+					continue
+				}
+
+				if headerTemplate != "" {
+					fmt.Fprintf(&builder, headerTemplate, fileHistory.FileName)
+				}
+				builder.WriteString("original:\n")
+				builder.WriteString(diffEntry.Original)
+				builder.WriteString("\nupdated:\n")
+				builder.WriteString(diffEntry.Updated)
+				builder.WriteString("\n")
+			}
+		}
+
+		return builder.String()
+	}
+}
+
+// DiffEntryToUnifiedDiff converts a DiffEntry to a unified diff format.
+func DiffEntryToUnifiedDiff(entry *types.DiffEntry) string {
+	if entry.Original == entry.Updated {
+		return ""
+	}
+
+	originalLines := strings.Split(entry.Original, "\n")
+	updatedLines := strings.Split(entry.Updated, "\n")
+
+	var diffBuilder strings.Builder
+
+	fmt.Fprintf(&diffBuilder, "@@ -%d,%d +%d,%d @@\n",
+		1, len(originalLines), 1, len(updatedLines))
+
+	for _, line := range originalLines {
+		diffBuilder.WriteString("-")
+		diffBuilder.WriteString(line)
+		diffBuilder.WriteString("\n")
+	}
+
+	for _, line := range updatedLines {
+		diffBuilder.WriteString("+")
+		diffBuilder.WriteString(line)
+		diffBuilder.WriteString("\n")
+	}
+
+	return strings.TrimSuffix(diffBuilder.String(), "\n")
+}
 
 // --- Preprocessors ---
 

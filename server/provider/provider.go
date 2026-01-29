@@ -38,6 +38,9 @@ type Client interface {
 // Called after receiving the first line. Return error to cancel the stream.
 type Validator func(p *Provider, ctx *Context, firstLine string) error
 
+// DiffHistoryBuilder processes multi-file diff history into a string for the prompt
+type DiffHistoryBuilder func(history []*types.FileDiffHistory) string
+
 // Context carries data through the completion pipeline
 type Context struct {
 	Request      *types.CompletionRequest
@@ -74,8 +77,9 @@ type Provider struct {
 	Preprocessors  []Preprocessor
 	PromptBuilder  PromptBuilder
 	Postprocessors []Postprocessor
-	Validators     []Validator // Validators run on first line during streaming
-	StopTokens     []string    // Stop tokens for streaming (provider-specific)
+	Validators     []Validator        // Validators run on first line during streaming
+	StopTokens     []string           // Stop tokens for streaming (provider-specific)
+	DiffBuilder    DiffHistoryBuilder // Processes diff history for the prompt
 }
 
 // GetCompletion implements engine.Provider

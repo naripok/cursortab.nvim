@@ -17,6 +17,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),
 		},
+		DiffBuilder: provider.FormatDiffHistoryOriginalUpdated("<|file_sep|>%s.diff\n"),
 		PromptBuilder: buildPrompt,
 		Postprocessors: []provider.Postprocessor{
 			provider.RejectEmpty(),
@@ -58,7 +59,10 @@ func buildPrompt(p *provider.Provider, ctx *provider.Context) *openai.Completion
 		}
 	}
 
-	diffSection := buildDiffSection(req)
+	diffSection := ""
+	if p.DiffBuilder != nil {
+		diffSection = p.DiffBuilder(req.FileDiffHistories)
+	}
 	originalLines := getTrimmedOriginalContent(req, ctx.WindowStart, len(ctx.TrimmedLines))
 
 	if diffSection != "" {
@@ -91,33 +95,6 @@ func buildPrompt(p *provider.Provider, ctx *provider.Context) *openai.Completion
 		N:           1,
 		Echo:        false,
 	}
-}
-
-func buildDiffSection(req *types.CompletionRequest) string {
-	if len(req.FileDiffHistories) == 0 {
-		return ""
-	}
-
-	var builder strings.Builder
-
-	for _, fileHistory := range req.FileDiffHistories {
-		for _, diffEntry := range fileHistory.DiffHistory {
-			if diffEntry.Original == "" && diffEntry.Updated == "" {
-				continue
-			}
-
-			builder.WriteString("<|file_sep|>")
-			builder.WriteString(fileHistory.FileName)
-			builder.WriteString(".diff\n")
-			builder.WriteString("original:\n")
-			builder.WriteString(diffEntry.Original)
-			builder.WriteString("\nupdated:\n")
-			builder.WriteString(diffEntry.Updated)
-			builder.WriteString("\n")
-		}
-	}
-
-	return builder.String()
 }
 
 func getTrimmedOriginalContent(req *types.CompletionRequest, trimOffset, lineCount int) []string {

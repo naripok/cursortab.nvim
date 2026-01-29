@@ -18,6 +18,12 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),
 		},
+		DiffBuilder: provider.FormatDiffHistory(provider.DiffHistoryOptions{
+			HeaderTemplate: "User edited %q:\n",
+			Prefix:         "```diff\n",
+			Suffix:         "\n```",
+			Separator:      "\n\n",
+		}),
 		PromptBuilder: buildPrompt,
 		Postprocessors: []provider.Postprocessor{
 			provider.RejectEmpty(),
@@ -36,7 +42,10 @@ func buildPrompt(p *provider.Provider, ctx *provider.Context) *openai.Completion
 	req := ctx.Request
 
 	userExcerpt := buildUserExcerpt(req, ctx)
-	userEdits := buildUserEditsFromDiffHistory(req)
+	userEdits := ""
+	if p.DiffBuilder != nil {
+		userEdits = p.DiffBuilder(req.FileDiffHistories)
+	}
 	diagnosticsText := formatDiagnosticsForPrompt(req)
 	prompt := buildInstructionPrompt(userEdits, diagnosticsText, userExcerpt)
 
@@ -127,70 +136,6 @@ func buildUserExcerpt(req *types.CompletionRequest, ctx *provider.Context) strin
 	promptBuilder.WriteString("\n```")
 
 	return promptBuilder.String()
-}
-
-func buildUserEditsFromDiffHistory(req *types.CompletionRequest) string {
-	if len(req.FileDiffHistories) == 0 {
-		return ""
-	}
-
-	var editsBuilder strings.Builder
-	firstEdit := true
-
-	for _, fileHistory := range req.FileDiffHistories {
-		if len(fileHistory.DiffHistory) == 0 {
-			continue
-		}
-
-		for _, diffEntry := range fileHistory.DiffHistory {
-			unifiedDiff := diffEntryToUnifiedDiff(diffEntry)
-			if unifiedDiff == "" {
-				continue
-			}
-
-			if !firstEdit {
-				editsBuilder.WriteString("\n\n")
-			}
-			firstEdit = false
-
-			editsBuilder.WriteString("User edited \"")
-			editsBuilder.WriteString(fileHistory.FileName)
-			editsBuilder.WriteString("\":\n")
-			editsBuilder.WriteString("```diff\n")
-			editsBuilder.WriteString(unifiedDiff)
-			editsBuilder.WriteString("\n```")
-		}
-	}
-
-	return editsBuilder.String()
-}
-
-func diffEntryToUnifiedDiff(entry *types.DiffEntry) string {
-	if entry.Original == entry.Updated {
-		return ""
-	}
-
-	originalLines := strings.Split(entry.Original, "\n")
-	updatedLines := strings.Split(entry.Updated, "\n")
-
-	var diffBuilder strings.Builder
-
-	fmt.Fprintf(&diffBuilder, "@@ -%d,%d +%d,%d @@\n",
-		1, len(originalLines), 1, len(updatedLines))
-
-	for _, line := range originalLines {
-		diffBuilder.WriteString("-")
-		diffBuilder.WriteString(line)
-		diffBuilder.WriteString("\n")
-	}
-
-	for _, line := range updatedLines {
-		diffBuilder.WriteString("+")
-		diffBuilder.WriteString(line)
-		diffBuilder.WriteString("\n")
-	}
-
-	return strings.TrimSuffix(diffBuilder.String(), "\n")
 }
 
 func formatDiagnosticsForPrompt(req *types.CompletionRequest) string {

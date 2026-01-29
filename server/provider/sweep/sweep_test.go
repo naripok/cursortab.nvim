@@ -82,27 +82,6 @@ func TestBuildPrompt_WithDiffHistory(t *testing.T) {
 	assert.True(t, strings.Contains(req.Prompt, "updated:\nnew code"), "should have updated in diff")
 }
 
-func TestBuildDiffSection_Empty(t *testing.T) {
-	req := &types.CompletionRequest{}
-	result := buildDiffSection(req)
-	assert.Equal(t, "", result, "empty diff histories")
-}
-
-func TestBuildDiffSection_SkipsEmptyDiffs(t *testing.T) {
-	req := &types.CompletionRequest{
-		FileDiffHistories: []*types.FileDiffHistory{
-			{
-				FileName: "test.go",
-				DiffHistory: []*types.DiffEntry{
-					{Original: "", Updated: ""},
-				},
-			},
-		},
-	}
-	result := buildDiffSection(req)
-	assert.Equal(t, "", result, "should skip empty diffs")
-}
-
 func TestGetTrimmedOriginalContent(t *testing.T) {
 	tests := []struct {
 		name        string
