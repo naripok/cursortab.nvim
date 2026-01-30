@@ -140,7 +140,7 @@ function events.setup()
 	-- Set up keymaps
 	local cfg = config.get()
 	if cfg.keymaps.accept then
-		local accept_key = cfg.keymaps.accept
+		local accept_key = cfg.keymaps.accept --[[@as string]]
 		vim.keymap.set("i", accept_key, on_tab, { noremap = true, silent = true, expr = true })
 		vim.keymap.set("n", accept_key, on_tab, { noremap = true, silent = true, expr = true })
 	end
