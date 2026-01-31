@@ -39,8 +39,17 @@ type Daemon struct {
 }
 
 func NewDaemon(config Config) (*Daemon, error) {
+	apiKey := ""
+	if config.Provider.ApiKeyEnv != "" {
+		apiKey = os.Getenv(config.Provider.ApiKeyEnv)
+		if apiKey == "" {
+			logger.Warn("api_key_env is set to %q but environment variable is not defined", config.Provider.ApiKeyEnv)
+		}
+	}
+
 	providerConfig := &types.ProviderConfig{
 		ProviderURL:         config.Provider.URL,
+		APIKey:              apiKey,
 		ProviderModel:       config.Provider.Model,
 		ProviderTemperature: config.Provider.Temperature,
 		ProviderMaxTokens:   config.Provider.MaxTokens,

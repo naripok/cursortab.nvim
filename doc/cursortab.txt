@@ -80,6 +80,7 @@ Full configuration with defaults: >lua
     provider = {
       type = "inline",              -- "inline", "fim", "sweep", "zeta"
       url = "http://localhost:8000",
+      api_key_env = "",             -- Env var name for API key
       model = "",
       temperature = 0.0,
       max_tokens = 512,
@@ -164,6 +165,12 @@ PROVIDER OPTIONS                                    *cursortab-config-provider*
 
   `url`
       URL of the provider server.
+
+  `api_key_env`
+      Environment variable name containing the API key for authenticated
+      requests. The value is read from the environment at daemon startup.
+      Example: "OPENAI_API_KEY" reads from $OPENAI_API_KEY. Leave empty
+      for unauthenticated local servers.
 
   `model`
       Model name to use.

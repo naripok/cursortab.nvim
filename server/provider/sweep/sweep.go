@@ -1,10 +1,11 @@
 package sweep
 
 import (
+	"strings"
+
 	"cursortab/client/openai"
 	"cursortab/provider"
 	"cursortab/types"
-	"strings"
 )
 
 // NewProvider creates a new Sweep Next-Edit model provider
@@ -12,7 +13,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
 		Name:          "sweep",
 		Config:        config,
-		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath, config.APIKey),
 		StreamingType: provider.StreamingLines,
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),

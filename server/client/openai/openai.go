@@ -102,14 +102,16 @@ type Client struct {
 	HTTPClient     *http.Client
 	URL            string
 	CompletionPath string
+	APIKey         string
 }
 
 // NewClient creates a new OpenAI-compatible client
-func NewClient(url, completionPath string) *Client {
+func NewClient(url, completionPath, apiKey string) *Client {
 	return &Client{
 		HTTPClient:     &http.Client{},
 		URL:            url,
 		CompletionPath: completionPath,
+		APIKey:         apiKey,
 	}
 }
 
@@ -179,6 +181,9 @@ func (c *Client) runLineStream(ctx context.Context, req *CompletionRequest, line
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	// Send the request
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -388,6 +393,9 @@ func (c *Client) runTokenStream(ctx context.Context, req *CompletionRequest, tex
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	// Send the request
 	resp, err := c.HTTPClient.Do(httpReq)
@@ -545,6 +553,9 @@ func (c *Client) doRequest(ctx context.Context, req *CompletionRequest) ([]byte,
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	// Send the request
 	resp, err := c.HTTPClient.Do(httpReq)

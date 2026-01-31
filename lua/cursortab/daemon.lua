@@ -61,6 +61,7 @@ local function start_daemon()
 		provider = {
 			type = cfg.provider.type,
 			url = cfg.provider.url,
+			api_key_env = cfg.provider.api_key_env,
 			model = cfg.provider.model,
 			temperature = cfg.provider.temperature,
 			max_tokens = cfg.provider.max_tokens,

@@ -35,6 +35,7 @@
 ---@class CursortabProviderConfig
 ---@field type string
 ---@field url string
+---@field api_key_env string|nil Environment variable name containing the API key (e.g., "OPENAI_API_KEY")
 ---@field model string
 ---@field temperature number
 ---@field max_tokens integer Max tokens to generate (also used to derive input context size)
@@ -98,6 +99,7 @@ local default_config = {
 	provider = {
 		type = "inline", -- "inline", "fim", "sweep", or "zeta"
 		url = "http://localhost:8000", -- URL of the provider server
+		api_key_env = "", -- Environment variable name for API key (e.g., "OPENAI_API_KEY")
 		model = "", -- Model name
 		temperature = 0.0, -- Sampling temperature
 		max_tokens = 512, -- Max tokens to generate

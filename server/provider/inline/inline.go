@@ -1,10 +1,11 @@
 package inline
 
 import (
+	"strings"
+
 	"cursortab/client/openai"
 	"cursortab/provider"
 	"cursortab/types"
-	"strings"
 )
 
 // NewProvider creates a new inline completion provider
@@ -12,7 +13,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
 		Name:          "inline",
 		Config:        config,
-		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath, config.APIKey),
 		StreamingType: provider.StreamingTokens, // Token-by-token streaming for ghost text
 		Preprocessors: []provider.Preprocessor{
 			provider.SkipIfTextAfterCursor(),

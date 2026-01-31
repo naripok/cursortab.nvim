@@ -1,10 +1,11 @@
 package fim
 
 import (
+	"strings"
+
 	"cursortab/client/openai"
 	"cursortab/provider"
 	"cursortab/types"
-	"strings"
 )
 
 // NewProvider creates a new fill-in-the-middle completion provider
@@ -12,7 +13,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
 		Name:          "fim",
 		Config:        config,
-		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath, config.APIKey),
 		StreamingType: provider.StreamingLines,
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),

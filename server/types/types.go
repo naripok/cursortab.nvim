@@ -123,6 +123,7 @@ type FIMTokenConfig struct {
 // ProviderConfig holds configuration for providers
 type ProviderConfig struct {
 	ProviderURL         string         // URL of the provider server (e.g., "http://localhost:8000")
+	APIKey              string         // Resolved API key for authenticated requests
 	ProviderModel       string         // Model name
 	ProviderTemperature float64        // Sampling temperature
 	ProviderMaxTokens   int            // Max tokens to generate (also drives input trimming)

@@ -36,6 +36,7 @@ type FIMTokensConfig struct {
 type ProviderConfig struct {
 	Type                 string          `json:"type"` // "inline", "sweep", "zeta"
 	URL                  string          `json:"url"`
+	ApiKeyEnv            string          `json:"api_key_env"` // Environment variable name for API key
 	Model                string          `json:"model"`
 	Temperature          float64         `json:"temperature"`
 	MaxTokens            int             `json:"max_tokens"` // Max tokens to generate (also drives input trimming)

@@ -39,7 +39,7 @@ func TestDoCompletion_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	resp, err := client.DoCompletion(ctx, &CompletionRequest{
@@ -60,7 +60,7 @@ func TestDoCompletion_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	_, err := client.DoCompletion(ctx, &CompletionRequest{
@@ -78,7 +78,7 @@ func TestDoCompletion_InvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	_, err := client.DoCompletion(ctx, &CompletionRequest{
@@ -87,6 +87,68 @@ func TestDoCompletion_InvalidJSON(t *testing.T) {
 	})
 
 	assert.Error(t, err, "Expected error for invalid JSON")
+}
+
+func TestDoCompletion_WithAPIKey(t *testing.T) {
+	var capturedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		resp := CompletionResponse{
+			ID: "test-id",
+			Choices: []struct {
+				Index        int    `json:"index"`
+				Text         string `json:"text"`
+				Logprobs     any    `json:"logprobs"`
+				FinishReason string `json:"finish_reason"`
+			}{
+				{Index: 0, Text: "completion", FinishReason: "stop"},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "", "sk-test-api-key")
+	ctx := context.Background()
+
+	_, err := client.DoCompletion(ctx, &CompletionRequest{
+		Model:  "test-model",
+		Prompt: "hello",
+	})
+
+	assert.NoError(t, err, "DoCompletion")
+	assert.Equal(t, "Bearer sk-test-api-key", capturedAuth, "Authorization header")
+}
+
+func TestDoCompletion_WithoutAPIKey(t *testing.T) {
+	var hasAuthHeader bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hasAuthHeader = r.Header.Get("Authorization") != ""
+		resp := CompletionResponse{
+			ID: "test-id",
+			Choices: []struct {
+				Index        int    `json:"index"`
+				Text         string `json:"text"`
+				Logprobs     any    `json:"logprobs"`
+				FinishReason string `json:"finish_reason"`
+			}{
+				{Index: 0, Text: "completion", FinishReason: "stop"},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "", "")
+	ctx := context.Background()
+
+	_, err := client.DoCompletion(ctx, &CompletionRequest{
+		Model:  "test-model",
+		Prompt: "hello",
+	})
+
+	assert.NoError(t, err, "DoCompletion")
+	assert.False(t, hasAuthHeader, "Authorization header should not be set")
 }
 
 func TestDoLineStream_Basic(t *testing.T) {
@@ -113,7 +175,7 @@ func TestDoLineStream_Basic(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -150,7 +212,7 @@ func TestDoLineStream_MaxLines(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -186,7 +248,7 @@ func TestDoLineStream_StopToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -214,7 +276,7 @@ func TestDoLineStream_Cancel(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		close(started)
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			evt := `{"id":"1","choices":[{"text":"x","index":0}]}`
 			w.Write([]byte("data: " + evt + "\n\n"))
 			flusher.Flush()
@@ -223,7 +285,7 @@ func TestDoLineStream_Cancel(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -259,7 +321,7 @@ func TestDoTokenStream_Basic(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoTokenStream(ctx, &CompletionRequest{
@@ -286,7 +348,7 @@ func TestDoTokenStream_MaxChars(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		// Send lots of tokens
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			evt := `{"id":"1","choices":[{"text":"word ","index":0}]}`
 			w.Write([]byte("data: " + evt + "\n\n"))
 			flusher.Flush()
@@ -294,7 +356,7 @@ func TestDoTokenStream_MaxChars(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoTokenStream(ctx, &CompletionRequest{
@@ -329,7 +391,7 @@ func TestDoTokenStream_StopToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoTokenStream(ctx, &CompletionRequest{
@@ -354,7 +416,7 @@ func TestDoLineStream_HTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -387,7 +449,7 @@ func TestDoLineStream_SkipsInvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -420,7 +482,7 @@ func TestDoLineStream_SkipsComments(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "")
+	client := NewClient(server.URL, "", "")
 	ctx := context.Background()
 
 	stream := client.DoLineStream(ctx, &CompletionRequest{
@@ -436,4 +498,64 @@ func TestDoLineStream_SkipsComments(t *testing.T) {
 	<-stream.DoneChan()
 
 	assert.Equal(t, 1, len(lines), "lines length (comments skip)")
+}
+
+func TestDoLineStream_WithAPIKey(t *testing.T) {
+	var capturedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		flusher, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		w.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"text\":\"line\\n\",\"index\":0}]}\n\n"))
+		flusher.Flush()
+		w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "", "sk-line-stream-key")
+	ctx := context.Background()
+
+	stream := client.DoLineStream(ctx, &CompletionRequest{
+		Model:  "test-model",
+		Prompt: "hello",
+	}, 0, nil)
+
+	for range stream.LinesChan() {
+	}
+	<-stream.DoneChan()
+
+	assert.Equal(t, "Bearer sk-line-stream-key", capturedAuth, "Authorization header")
+}
+
+func TestDoTokenStream_WithAPIKey(t *testing.T) {
+	var capturedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		flusher, _ := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		w.Write([]byte("data: {\"id\":\"1\",\"choices\":[{\"text\":\"token\",\"index\":0}]}\n\n"))
+		flusher.Flush()
+		w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "", "sk-token-stream-key")
+	ctx := context.Background()
+
+	stream := client.DoTokenStream(ctx, &CompletionRequest{
+		Model:  "test-model",
+		Prompt: "hello",
+	}, 0, nil)
+
+	for range stream.LinesChan() {
+	}
+	<-stream.DoneChan()
+
+	assert.Equal(t, "Bearer sk-token-stream-key", capturedAuth, "Authorization header")
 }

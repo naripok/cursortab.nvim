@@ -1,11 +1,12 @@
 package zeta
 
 import (
+	"fmt"
+	"strings"
+
 	"cursortab/client/openai"
 	"cursortab/provider"
 	"cursortab/types"
-	"fmt"
-	"strings"
 )
 
 // NewProvider creates a new Zeta provider (Zed's native model)
@@ -13,7 +14,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
 		Name:          "zeta",
 		Config:        config,
-		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath, config.APIKey),
 		StreamingType: provider.StreamingLines,
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),

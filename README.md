@@ -108,6 +108,7 @@ require("cursortab").setup({
   provider = {
     type = "inline",                      -- Provider: "inline", "fim", "sweep", or "zeta"
     url = "http://localhost:8000",        -- URL of the provider server
+    api_key_env = "",                     -- Env var name for API key (e.g., "OPENAI_API_KEY")
     model = "",                           -- Model name
     temperature = 0.0,                    -- Sampling temperature
     max_tokens = 512,                     -- Max tokens to generate
