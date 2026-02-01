@@ -1,6 +1,6 @@
 *cursortab.txt*  AI-powered code completion for Neovim
 
-Author: Leo
+Author: Leonard
 License: MIT
 
 ==============================================================================
