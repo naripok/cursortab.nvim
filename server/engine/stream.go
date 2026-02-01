@@ -228,6 +228,13 @@ func (e *Engine) handleStreamCompleteSimple() {
 		ss.HasPendingLine = false
 	}
 
+	// Log response via provider postprocessing (this also runs postprocessors)
+	sp, ok := e.provider.(LineStreamProvider)
+	if ok {
+		accumulatedText := ss.AccumulatedText.String()
+		_, _ = sp.FinishLineStream(ss.ProviderContext, accumulatedText, "stop", false)
+	}
+
 	// Finalize remaining stages
 	stagingResult := ss.StageBuilder.Finalize()
 

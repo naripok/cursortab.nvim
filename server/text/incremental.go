@@ -308,12 +308,16 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 	remappedChanges := make(map[int]LineChange)
 	relativeToBufferLine := make(map[int]int)
 
-	// Compute buffer lines for this stage
-	lineNumToBufferLine := make(map[int]int)
-	for lineNum, change := range stage.rawChanges {
-		bufferLine := GetBufferLineForChange(change, lineNum, b.BaseLineOffset, b.diffBuilder.LineMapping)
-		lineNumToBufferLine[lineNum] = bufferLine
+	// Compute buffer lines for this stage using getStageBufferRange.
+	// This ensures pure additions get their buffer lines incremented to the insertion point.
+	diffResult := &DiffResult{
+		Changes:      b.diffBuilder.Changes,
+		LineMapping:  b.diffBuilder.LineMapping,
+		OldLineCount: len(b.OldLines),
+		NewLineCount: len(b.diffBuilder.NewLines),
 	}
+	lineNumToBufferLine := make(map[int]int)
+	getStageBufferRange(stage, b.BaseLineOffset, diffResult, lineNumToBufferLine)
 
 	for lineNum, change := range stage.rawChanges {
 		newLineNum := lineNum
