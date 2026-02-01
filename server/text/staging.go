@@ -407,9 +407,13 @@ func finalizeStages(stages []*Stage, newLines []string, filePath string, baseLin
 		// Create cursor target
 		var cursorTarget *types.CursorPredictionTarget
 		if isLastStage {
+			// For last stage, cursor target points to end of NEW content,
+			// not the old buffer end. This is important when additions extend
+			// beyond the original buffer.
+			newEndLine := stage.BufferStart + len(stageLines) - 1
 			cursorTarget = &types.CursorPredictionTarget{
 				RelativePath:    filePath,
-				LineNumber:      int32(stage.BufferEnd),
+				LineNumber:      int32(newEndLine),
 				ShouldRetrigger: true,
 			}
 		} else {

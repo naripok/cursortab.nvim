@@ -1969,3 +1969,48 @@ func TestCreateStages_MixedAdditionsAndModifications(t *testing.T) {
 			"group BufferLine should be >= stage BufferStart")
 	}
 }
+
+// TestCreateStages_CursorTargetPointsToEndOfNewContent verifies that the cursor target
+// for the last stage points to the end of the NEW content, not the old buffer end.
+// This is critical when a stage has modifications followed by additions that extend
+// beyond the original buffer.
+func TestCreateStages_CursorTargetPointsToEndOfNewContent(t *testing.T) {
+	// Original buffer has 3 lines, new content has 10 lines
+	// Modification on line 3, additions on lines 4-10
+	diff := &DiffResult{
+		Changes: map[int]LineChange{
+			3:  {Type: ChangeAppendChars, NewLineNum: 3, OldLineNum: 3, Content: "line3 extended", OldContent: "line3", ColStart: 5, ColEnd: 14},
+			4:  {Type: ChangeAddition, NewLineNum: 4, OldLineNum: 3, Content: "added line 4"},
+			5:  {Type: ChangeAddition, NewLineNum: 5, OldLineNum: 3, Content: "added line 5"},
+			6:  {Type: ChangeAddition, NewLineNum: 6, OldLineNum: 3, Content: "added line 6"},
+			7:  {Type: ChangeAddition, NewLineNum: 7, OldLineNum: 3, Content: "added line 7"},
+			8:  {Type: ChangeAddition, NewLineNum: 8, OldLineNum: 3, Content: "added line 8"},
+			9:  {Type: ChangeAddition, NewLineNum: 9, OldLineNum: 3, Content: "added line 9"},
+			10: {Type: ChangeAddition, NewLineNum: 10, OldLineNum: 3, Content: "added line 10"},
+		},
+		OldLineCount: 3,
+		NewLineCount: 10,
+		LineMapping: &LineMapping{
+			NewToOld: []int{1, 2, 3, -1, -1, -1, -1, -1, -1, -1},
+			OldToNew: []int{1, 2, 3},
+		},
+	}
+
+	newLines := []string{"line1", "line2", "line3 extended", "added line 4", "added line 5", "added line 6", "added line 7", "added line 8", "added line 9", "added line 10"}
+	oldLines := []string{"line1", "line2", "line3"}
+
+	result := CreateStages(diff, 3, 1, 50, 1, 3, "test.txt", newLines, oldLines)
+
+	assert.NotNil(t, result, "result should not be nil")
+	assert.Equal(t, 1, len(result.Stages), "should have 1 stage")
+
+	stage := result.Stages[0]
+	assert.Equal(t, 3, stage.BufferStart, "stage should start at line 3")
+	assert.Equal(t, 8, len(stage.Lines), "stage should have 8 lines (lines 3-10)")
+
+	// The cursor target should point to the end of the NEW content (line 10),
+	// not the old buffer end (line 3)
+	expectedCursorTargetLine := stage.BufferStart + len(stage.Lines) - 1 // 3 + 8 - 1 = 10
+	assert.Equal(t, int32(expectedCursorTargetLine), stage.CursorTarget.LineNumber,
+		"cursor target should point to end of new content, not old buffer end")
+}

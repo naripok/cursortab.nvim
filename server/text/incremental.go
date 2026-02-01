@@ -453,9 +453,13 @@ func (b *IncrementalStageBuilder) Finalize() *StagingResult {
 		isLastStage := i == len(stages)-1
 
 		if isLastStage {
+			// For last stage, cursor target points to end of NEW content,
+			// not the old buffer end. This is important when additions extend
+			// beyond the original buffer.
+			newEndLine := stage.BufferStart + len(stage.Lines) - 1
 			stage.CursorTarget = &types.CursorPredictionTarget{
 				RelativePath:    b.FilePath,
-				LineNumber:      int32(stage.BufferEnd),
+				LineNumber:      int32(newEndLine),
 				ShouldRetrigger: true,
 			}
 		} else {
