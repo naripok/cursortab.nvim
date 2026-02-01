@@ -1259,6 +1259,61 @@ func TestIncrementalDiffBuilder_SpecialCharacters(t *testing.T) {
 	}
 }
 
+// TestIncrementalDiffBuilder_PrefixMatch verifies that when an old line is a prefix
+// of a new line, it's detected as a modification (append_chars), not an addition.
+// This is critical for code completion where the user types partial content and
+// the model completes it to a longer line.
+func TestIncrementalDiffBuilder_PrefixMatch(t *testing.T) {
+	oldLines := []string{"aaa", "", "xx"}
+	builder := NewIncrementalDiffBuilder(oldLines)
+
+	// Line 1: exact match
+	change1 := builder.AddLine("aaa")
+	assert.Nil(t, change1, "expected no change for exact match")
+
+	// Line 2: exact match (empty)
+	change2 := builder.AddLine("")
+	assert.Nil(t, change2, "expected no change for empty line match")
+
+	// Line 3: "xx" -> "xx completed with more text" should be append_chars, not addition
+	change3 := builder.AddLine("xx completed with more text")
+	assert.NotNil(t, change3, "expected change for prefix completion")
+	assert.Equal(t, ChangeAppendChars, change3.Type, "expected append_chars for prefix match")
+	assert.Equal(t, 3, change3.OldLineNum, "old line num")
+	assert.Equal(t, 3, change3.NewLineNum, "new line num")
+	assert.Equal(t, "xx", change3.OldContent, "old content")
+	assert.Equal(t, "xx completed with more text", change3.Content, "new content")
+
+	// Line 4: new addition after the prefix match
+	change4 := builder.AddLine("    next line")
+	assert.NotNil(t, change4, "expected change for addition")
+	assert.Equal(t, ChangeAddition, change4.Type, "expected addition")
+}
+
+// TestIncrementalDiffBuilder_PrefixMatchWithFollowingAdditions tests the complete
+// scenario where a prefix match is followed by multiple additions.
+func TestIncrementalDiffBuilder_PrefixMatchWithFollowingAdditions(t *testing.T) {
+	oldLines := []string{"header", "", "px"}
+	builder := NewIncrementalDiffBuilder(oldLines)
+
+	builder.AddLine("header")                           // exact match
+	builder.AddLine("")                                 // exact match
+	builder.AddLine("px completed with a longer line") // prefix match -> append_chars
+	builder.AddLine("    following line")              // addition
+
+	// Should have 2 changes: append_chars on line 3, addition on line 4
+	assert.Equal(t, 2, len(builder.Changes), "expected 2 changes")
+
+	// Verify the append_chars change
+	change3 := builder.Changes[3]
+	assert.Equal(t, ChangeAppendChars, change3.Type, "line 3 should be append_chars")
+	assert.Equal(t, "px", change3.OldContent, "old content")
+
+	// Verify the addition
+	change4 := builder.Changes[4]
+	assert.Equal(t, ChangeAddition, change4.Type, "line 4 should be addition")
+}
+
 // TestLineSimilarity_EdgeCases tests similarity calculation edge cases.
 func TestLineSimilarity_EdgeCases(t *testing.T) {
 	tests := []struct {

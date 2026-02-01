@@ -3,6 +3,7 @@ package text
 import (
 	"cursortab/logger"
 	"cursortab/types"
+	"strings"
 )
 
 // IncrementalDiffBuilder builds diff results incrementally as lines stream in.
@@ -124,13 +125,23 @@ func (b *IncrementalDiffBuilder) findMatchingOldLine(newLine string, _ int) int 
 			continue // Already matched
 		}
 
+		oldLine := b.OldLines[i]
+
 		// Check exact match first
-		if b.OldLines[i] == newLine {
+		if oldLine == newLine {
+			return i + 1
+		}
+
+		// Check prefix match: if oldLine is a non-empty prefix of newLine,
+		// this is a completion (append_chars). Similarity-based matching fails
+		// when the new line is much longer than the old line, but a prefix
+		// relationship clearly indicates a match.
+		if len(oldLine) > 0 && strings.HasPrefix(newLine, oldLine) {
 			return i + 1
 		}
 
 		// Check similarity
-		similarity := LineSimilarity(newLine, b.OldLines[i])
+		similarity := LineSimilarity(newLine, oldLine)
 		if similarity > bestSimilarity {
 			bestSimilarity = similarity
 			bestIdx = i
