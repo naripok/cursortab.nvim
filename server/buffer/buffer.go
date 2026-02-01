@@ -141,12 +141,16 @@ func (b *NvimBuffer) Sync(workspacePath string) (*SyncResult, error) {
 	var cursor [2]int
 	var scrollOffset int
 	var viewportBounds [2]int
+	var nvimCwd string
 
 	batch.CurrentBuffer(&currentBuf)
 	batch.BufferName(nvim.Buffer(0), &path) // Use 0 for current buffer
 	batch.BufferLines(nvim.Buffer(0), 0, -1, false, &lines)
 	batch.CurrentWindow(&window)
 	batch.WindowCursor(nvim.Window(0), &cursor) // Use 0 for current window
+
+	// Get Neovim's current working directory
+	batch.ExecLua(`return vim.fn.getcwd()`, &nvimCwd, nil)
 
 	// Get horizontal scroll offset (leftcol) from current window
 	batch.ExecLua(`
@@ -182,8 +186,8 @@ func (b *NvimBuffer) Sync(workspacePath string) (*SyncResult, error) {
 	b.viewportTop = viewportBounds[0]
 	b.viewportBottom = viewportBounds[1]
 
-	// Convert absolute path to relative workspace path
-	relativePath := makeRelativeToWorkspace(path, workspacePath)
+	// Convert absolute path to relative workspace path using Neovim's actual cwd
+	relativePath := makeRelativeToWorkspace(path, nvimCwd)
 	b.path = relativePath
 
 	// Handle buffer change
