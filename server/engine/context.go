@@ -1,9 +1,23 @@
 package engine
 
 import (
+	"cursortab/logger"
 	"cursortab/types"
 	"cursortab/utils"
 )
+
+// syncBuffer syncs the buffer state and handles file switching.
+func (e *Engine) syncBuffer() {
+	result, err := e.buffer.Sync(e.WorkspacePath)
+	if err != nil {
+		logger.Debug("sync error: %v", err)
+		return
+	}
+
+	if result != nil && result.BufferChanged {
+		e.handleFileSwitch(result.OldPath, result.NewPath, e.buffer.Lines())
+	}
+}
 
 // newFileStateFromBuffer creates a FileState snapshot from current buffer state.
 func (e *Engine) newFileStateFromBuffer() *FileState {
@@ -27,58 +41,47 @@ func (e *Engine) saveCurrentFileState() {
 }
 
 // handleFileSwitch manages file state when switching between files.
-// Called after Sync detects a buffer change. Returns true if state was restored.
 func (e *Engine) handleFileSwitch(oldPath, newPath string, currentLines []string) bool {
 	if oldPath == newPath {
 		return false
 	}
 
-	// Save state of the file we're leaving
 	if oldPath != "" {
 		e.fileStateStore[oldPath] = e.newFileStateFromBuffer()
 	}
 
-	// Try to restore state for the new file
 	if state, exists := e.fileStateStore[newPath]; exists {
 		if e.isFileStateValid(state, currentLines) {
-			// Restore the saved state
 			e.buffer.SetFileContext(state.PreviousLines, state.OriginalLines, state.DiffHistories)
 			state.LastAccessNs = e.clock.Now().UnixNano()
 			return true
 		}
-		// State is stale (file changed externally) - discard it
 		delete(e.fileStateStore, newPath)
 	}
 
-	// New file or stale state - initialize fresh (PreviousLines stays nil for new files)
 	e.buffer.SetFileContext(nil, copyLines(currentLines), nil)
 	return false
 }
 
 // isFileStateValid checks if saved state is still valid for the current file content.
-// Returns false if the file appears to have changed externally.
 func (e *Engine) isFileStateValid(state *FileState, currentLines []string) bool {
 	if len(state.OriginalLines) == 0 {
 		return false
 	}
 
-	// Simple heuristic: if line count changed significantly, state is stale
 	origLen := len(state.OriginalLines)
 	currLen := len(currentLines)
 	if origLen != currLen {
-		// Allow some tolerance for small changes
 		diff := origLen - currLen
 		if diff < 0 {
 			diff = -diff
 		}
-		// If more than 10% difference or more than 10 lines, consider stale
 		threshold := max(origLen/10, 10)
 		if diff > threshold {
 			return false
 		}
 	}
 
-	// Check anchor lines (first, middle, last) for major content drift
 	checkIndices := []int{0}
 	if currLen > 2 {
 		checkIndices = append(checkIndices, currLen/2, currLen-1)
@@ -93,7 +96,6 @@ func (e *Engine) isFileStateValid(state *FileState, currentLines []string) bool 
 		}
 	}
 
-	// If more than half of anchor lines changed, consider stale
 	return mismatches <= len(checkIndices)/2
 }
 
@@ -113,7 +115,6 @@ func (e *Engine) trimFileStateStore(maxFiles int) {
 		entries = append(entries, entry{path, state})
 	}
 
-	// Sort by LastAccessNs descending (most recent first)
 	for i := 0; i < len(entries)-1; i++ {
 		for j := i + 1; j < len(entries); j++ {
 			if entries[i].state.LastAccessNs < entries[j].state.LastAccessNs {
@@ -122,7 +123,6 @@ func (e *Engine) trimFileStateStore(maxFiles int) {
 		}
 	}
 
-	// Keep only maxFiles most recent entries
 	e.fileStateStore = make(map[string]*FileState)
 	for i := 0; i < maxFiles && i < len(entries); i++ {
 		e.fileStateStore[entries[i].path] = entries[i].state
@@ -130,17 +130,13 @@ func (e *Engine) trimFileStateStore(maxFiles int) {
 }
 
 // getAllFileDiffHistories returns diff history for the current file only.
-// This prevents context pollution from other files' diffs.
 func (e *Engine) getAllFileDiffHistories() []*types.FileDiffHistory {
-	// Only return diffs for the current file
 	if e.buffer.Path() == "" || len(e.buffer.DiffHistories()) == 0 {
 		return nil
 	}
 
-	// Copy to ensure immutability
 	diffs := copyDiffs(e.buffer.DiffHistories())
 
-	// Apply token limiting if configured
 	if e.config.MaxDiffTokens > 0 {
 		diffs = utils.TrimDiffEntries(diffs, e.config.MaxDiffTokens)
 	}

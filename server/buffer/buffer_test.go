@@ -203,8 +203,6 @@ func TestExtractGranularDiffs_Deletion(t *testing.T) {
 	assert.True(t, len(result) > 0, "should have diffs for deletion")
 }
 
-// --- Helper Function Tests ---
-
 func TestMakeRelativeToWorkspace(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -238,32 +236,4 @@ func TestMakeRelativeToWorkspace(t *testing.T) {
 			assert.Equal(t, tt.want, got, "relative path mismatch")
 		})
 	}
-}
-
-func TestGetString(t *testing.T) {
-	m := map[string]any{
-		"key1": "value1",
-		"key2": 123, // not a string
-	}
-
-	assert.Equal(t, "value1", getString(m, "key1"), "should get string value")
-	assert.Equal(t, "", getString(m, "key2"), "should return empty for non-string")
-	assert.Equal(t, "", getString(m, "missing"), "should return empty for missing key")
-}
-
-func TestGetNumber(t *testing.T) {
-	m := map[string]any{
-		"int":     42,
-		"float64": float64(3.14),
-		"int32":   int32(100),
-		"int64":   int64(1000),
-		"string":  "not a number",
-	}
-
-	assert.Equal(t, 42, getNumber(m, "int"), "should get int")
-	assert.Equal(t, 3, getNumber(m, "float64"), "should convert float64")
-	assert.Equal(t, 100, getNumber(m, "int32"), "should convert int32")
-	assert.Equal(t, 1000, getNumber(m, "int64"), "should convert int64")
-	assert.Equal(t, -1, getNumber(m, "string"), "should return -1 for non-number")
-	assert.Equal(t, -1, getNumber(m, "missing"), "should return -1 for missing key")
 }

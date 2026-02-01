@@ -133,6 +133,7 @@ type TokenStreamingState struct {
 	LineNum int
 }
 
+// state represents the current state of the engine's state machine
 type state int
 
 const (
@@ -143,6 +144,36 @@ const (
 	stateStreamingCompletion // New state for incremental streaming
 )
 
+// String returns a human-readable name for the state
+func (s state) String() string {
+	switch s {
+	case stateIdle:
+		return "Idle"
+	case statePendingCompletion:
+		return "PendingCompletion"
+	case stateHasCompletion:
+		return "HasCompletion"
+	case stateHasCursorTarget:
+		return "HasCursorTarget"
+	case stateStreamingCompletion:
+		return "StreamingCompletion"
+	default:
+		return "Unknown"
+	}
+}
+
+// prefetchState represents the state of prefetch operations
+type prefetchState int
+
+const (
+	prefetchNone prefetchState = iota
+	prefetchInFlight
+	prefetchWaitingForTab
+	prefetchWaitingForCursorPrediction
+	prefetchReady
+)
+
+// CursorPredictionConfig holds cursor prediction settings
 type CursorPredictionConfig struct {
 	Enabled            bool // Show jump indicators (default: true)
 	AutoAdvance        bool // On no-op, jump to last line + retrigger (default: true)
@@ -158,6 +189,7 @@ type FileState struct {
 	Version       int                // Buffer version when last active
 }
 
+// EngineConfig holds engine configuration
 type EngineConfig struct {
 	NsID                int
 	CompletionTimeout   time.Duration

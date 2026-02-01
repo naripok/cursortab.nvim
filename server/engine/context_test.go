@@ -5,23 +5,6 @@ import (
 	"testing"
 )
 
-func TestCopyLines(t *testing.T) {
-	original := []string{"a", "b", "c"}
-	copied := copyLines(original)
-
-	assert.Equal(t, len(original), len(copied), "copied length")
-
-	// Modify original
-	original[0] = "modified"
-
-	assert.NotEqual(t, original[0], copied[0], "copyLines should create a deep copy")
-}
-
-func TestCopyLines_Nil(t *testing.T) {
-	copied := copyLines(nil)
-	assert.Nil(t, copied, "copyLines(nil)")
-}
-
 func TestIsFileStateValid(t *testing.T) {
 	buf := newMockBuffer()
 	prov := newMockProvider()

@@ -9,18 +9,85 @@ import (
 	"cursortab/types"
 )
 
-// prefetchState represents the state of prefetch operations
-type prefetchState int
+// requestCompletion initiates a completion request.
+func (e *Engine) requestCompletion(source types.CompletionSource) {
+	if e.stopped {
+		return
+	}
 
-const (
-	prefetchNone prefetchState = iota
-	prefetchInFlight
-	prefetchWaitingForTab
-	prefetchWaitingForCursorPrediction
-	prefetchReady
-)
+	e.syncBuffer()
 
-// requestPrefetch requests a completion for a specific cursor position without changing the engine state
+	req := &types.CompletionRequest{
+		Source:            source,
+		WorkspacePath:     e.WorkspacePath,
+		WorkspaceID:       e.WorkspaceID,
+		FilePath:          e.buffer.Path(),
+		Lines:             e.buffer.Lines(),
+		Version:           e.buffer.Version(),
+		PreviousLines:     e.buffer.PreviousLines(),
+		FileDiffHistories: e.getAllFileDiffHistories(),
+		CursorRow:         e.buffer.Row(),
+		CursorCol:         e.buffer.Col(),
+		ViewportHeight:    e.getViewportHeightConstraint(),
+		LinterErrors:      e.buffer.LinterErrors(),
+	}
+
+	// Check if provider supports streaming
+	if streamProvider, ok := e.provider.(LineStreamProvider); ok {
+		switch streamProvider.GetStreamingType() {
+		case StreamingTypeLines:
+			e.requestStreamingCompletion(streamProvider, req)
+			return
+		case StreamingTypeTokens:
+			if tokenProvider, ok := e.provider.(TokenStreamProvider); ok {
+				e.requestTokenStreamingCompletion(tokenProvider, req)
+				return
+			}
+		}
+	}
+
+	// Fallback to batch mode
+	e.state = statePendingCompletion
+
+	ctx, cancel := context.WithTimeout(e.mainCtx, e.config.CompletionTimeout)
+	e.currentCancel = cancel
+
+	go func() {
+		defer cancel()
+
+		result, err := e.provider.GetCompletion(ctx, req)
+
+		if err != nil {
+			select {
+			case e.eventChan <- Event{Type: EventCompletionError, Data: err}:
+			case <-e.mainCtx.Done():
+			}
+			return
+		}
+
+		select {
+		case e.eventChan <- Event{Type: EventCompletionReady, Data: result}:
+		case <-e.mainCtx.Done():
+		}
+	}()
+}
+
+// getViewportHeightConstraint returns the viewport height constraint for completion requests.
+func (e *Engine) getViewportHeightConstraint() int {
+	if e.config.CursorPrediction.Enabled {
+		return 0
+	}
+	_, viewportBottom := e.buffer.ViewportBounds()
+	if viewportBottom > 0 && e.buffer.Row() > 0 {
+		if constraint := viewportBottom - e.buffer.Row(); constraint > 0 {
+			return constraint
+		}
+	}
+	return 0
+}
+
+// requestPrefetch requests a completion for a specific cursor position without changing the engine state.
+// Used to speculatively request completions ahead of user actions.
 func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int, overrideCol int) {
 	if e.stopped {
 		return
@@ -105,7 +172,9 @@ func (e *Engine) handlePrefetchReady(resp *types.CompletionResponse) {
 	}
 }
 
-// handlePrefetchCursorPrediction checks if prefetch should be shown immediately or as cursor target
+// handlePrefetchCursorPrediction checks if prefetch should be shown immediately or as cursor target.
+// If the first changed line is close to the cursor, shows completion directly.
+// Otherwise, shows a cursor prediction indicator pointing to the target line.
 func (e *Engine) handlePrefetchCursorPrediction() {
 	if len(e.prefetchedCompletions) == 0 {
 		return
@@ -143,18 +212,15 @@ func (e *Engine) handlePrefetchCursorPrediction() {
 }
 
 // tryShowPrefetchedCompletion attempts to show prefetched completion immediately.
-// Returns true if completion was shown, false otherwise.
 func (e *Engine) tryShowPrefetchedCompletion() bool {
 	if len(e.prefetchedCompletions) == 0 {
 		return false
 	}
 
-	// Sync buffer to get current cursor position
 	e.syncBuffer()
 
 	comp := e.prefetchedCompletions[0]
 
-	// Clear prefetch state before processing
 	e.prefetchedCompletions = nil
 	e.prefetchedCursorTarget = nil
 	e.prefetchState = prefetchNone
@@ -171,13 +237,13 @@ func (e *Engine) handlePrefetchError(err error) {
 	previousPrefetchState := e.prefetchState
 	e.prefetchState = prefetchNone
 
-	// If we were waiting for prefetch due to tab press, fall back to original logic
 	if previousPrefetchState == prefetchWaitingForTab {
 		e.handleDeferredCursorTarget()
 	}
 }
 
-// handleDeferredCursorTarget handles cursor target logic that was deferred due to prefetch in progress
+// handleDeferredCursorTarget handles cursor target logic that was deferred due to prefetch in progress.
+// Called when prefetch completes and user had pressed Tab while waiting.
 func (e *Engine) handleDeferredCursorTarget() {
 	if e.cursorTarget == nil {
 		return
@@ -199,7 +265,7 @@ func (e *Engine) handleDeferredCursorTarget() {
 			return
 		}
 
-		// No changes
+		// No changes in prefetched completion
 		e.handleCursorTarget()
 		return
 	}
@@ -214,4 +280,43 @@ func (e *Engine) handleDeferredCursorTarget() {
 
 	e.state = stateIdle
 	e.cursorTarget = nil
+}
+
+// prefetchAtNMinusOne triggers prefetch when at the second-to-last stage.
+// This allows the next completion to be ready when user accepts the last stage.
+func (e *Engine) prefetchAtNMinusOne() {
+	if e.stagedCompletion == nil {
+		return
+	}
+
+	// Check if we're at n-1 (one stage remaining after current)
+	if e.stagedCompletion.CurrentIdx != len(e.stagedCompletion.Stages)-1 {
+		return
+	}
+
+	lastStage := e.getStage(len(e.stagedCompletion.Stages) - 1)
+	if lastStage == nil || lastStage.CursorTarget == nil || !lastStage.CursorTarget.ShouldRetrigger {
+		return
+	}
+
+	overrideRow := max(1, lastStage.BufferStart)
+	e.requestPrefetch(types.CompletionSourceTyping, overrideRow, 0)
+	e.prefetchState = prefetchWaitingForCursorPrediction
+}
+
+// prefetchAtCursorTarget triggers prefetch after accepting to cursor target position.
+// This speculatively requests the next completion at the target location.
+func (e *Engine) prefetchAtCursorTarget() {
+	if e.cursorTarget == nil || !e.cursorTarget.ShouldRetrigger {
+		return
+	}
+
+	// Skip if prefetch already in flight
+	if e.prefetchState != prefetchNone {
+		return
+	}
+
+	overrideRow := max(1, int(e.cursorTarget.LineNumber))
+	e.requestPrefetch(types.CompletionSourceTyping, overrideRow, 0)
+	e.prefetchState = prefetchWaitingForCursorPrediction
 }

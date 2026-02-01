@@ -1,25 +1,94 @@
 package engine
 
 import (
+	"context"
+	"errors"
+	"runtime/debug"
+	"sync/atomic"
+
+	"cursortab/logger"
 	"cursortab/types"
 )
 
-// String returns a human-readable name for the state
-func (s state) String() string {
-	switch s {
-	case stateIdle:
-		return "Idle"
-	case statePendingCompletion:
-		return "PendingCompletion"
-	case stateHasCompletion:
-		return "HasCompletion"
-	case stateHasCursorTarget:
-		return "HasCursorTarget"
-	case stateStreamingCompletion:
-		return "StreamingCompletion"
-	default:
-		return "Unknown"
+// EventType represents the type of event in the engine
+type EventType string
+
+// Event type constants
+const (
+	EventEsc               EventType = "esc"
+	EventTextChanged       EventType = "text_changed"
+	EventTextChangeTimeout EventType = "trigger_completion"
+	EventCursorMovedNormal EventType = "cursor_moved_normal"
+	EventInsertEnter       EventType = "insert_enter"
+	EventInsertLeave       EventType = "insert_leave"
+	EventAccept            EventType = "accept"
+	EventPartialAccept     EventType = "partial_accept"
+	EventIdleTimeout       EventType = "idle_timeout"
+	EventCompletionReady   EventType = "completion_ready"
+	EventCompletionError   EventType = "completion_error"
+	EventPrefetchReady     EventType = "prefetch_ready"
+	EventPrefetchError     EventType = "prefetch_error"
+
+	// Streaming events (handled directly via channel selection, not through eventChan)
+	EventStreamLine     EventType = "stream_line"     // A line was received from the stream
+	EventStreamComplete EventType = "stream_complete" // Stream completed
+	EventStreamError    EventType = "stream_error"    // Stream error
+)
+
+// Event represents an event in the engine
+type Event struct {
+	Type EventType
+	Data any
+}
+
+var eventTypeMap map[string]EventType
+
+func init() {
+	eventTypeMap = buildEventTypeMap()
+	// Also initialize transition map
+	transitionMap = make(map[transitionKey]*Transition)
+	for i := range transitions {
+		t := &transitions[i]
+		key := transitionKey{from: t.From, event: t.Event}
+		transitionMap[key] = t
 	}
+}
+
+func buildEventTypeMap() map[string]EventType {
+	eventMap := make(map[string]EventType)
+
+	allEventTypes := []EventType{
+		EventEsc,
+		EventTextChanged,
+		EventTextChangeTimeout,
+		EventCursorMovedNormal,
+		EventInsertEnter,
+		EventInsertLeave,
+		EventAccept,
+		EventPartialAccept,
+		EventIdleTimeout,
+		EventCompletionReady,
+		EventCompletionError,
+		EventPrefetchReady,
+		EventPrefetchError,
+		EventStreamLine,
+		EventStreamComplete,
+		EventStreamError,
+	}
+
+	for _, eventType := range allEventTypes {
+		eventMap[string(eventType)] = eventType
+	}
+
+	return eventMap
+}
+
+// EventTypeFromString converts a string to EventType
+func EventTypeFromString(s string) EventType {
+	if eventType, exists := eventTypeMap[s]; exists {
+		return eventType
+	}
+	return ""
 }
 
 // Transition represents a valid state transition in the engine's state machine
@@ -30,7 +99,6 @@ type Transition struct {
 }
 
 // transitions defines all valid state transitions in the engine.
-// This table serves as documentation and enables validation of state changes.
 //
 // State Machine:
 //
@@ -105,25 +173,12 @@ type transitionKey struct {
 	event EventType
 }
 
-func init() {
-	transitionMap = make(map[transitionKey]*Transition)
-	for i := range transitions {
-		t := &transitions[i]
-		key := transitionKey{from: t.From, event: t.Event}
-		transitionMap[key] = t
-	}
-}
-
 // findTransition looks up a valid transition for the given state and event.
-// Returns nil if no valid transition exists.
 func findTransition(from state, event EventType) *Transition {
 	return transitionMap[transitionKey{from: from, event: event}]
 }
 
 // dispatch finds and executes the appropriate transition for an event.
-// Returns true if a transition was found and executed, false otherwise.
-// Note: The actual state change is performed by the action function,
-// which allows for conditional transitions based on runtime state.
 func (e *Engine) dispatch(event Event) bool {
 	t := findTransition(e.state, event.Type)
 	if t == nil {
@@ -144,12 +199,167 @@ func (e *Engine) dispatch(event Event) bool {
 	return true
 }
 
-// Action functions for state transitions.
-// These wrap the existing handler logic and manage state transitions explicitly.
+// eventLoopRestarts tracks the number of event loop restarts for panic recovery
+var eventLoopRestarts atomic.Int32
+
+const maxEventLoopRestarts = 3
+
+func (e *Engine) eventLoop(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			restarts := eventLoopRestarts.Add(1)
+			logger.Error("event loop panic [%d/%d]: %v\n%s",
+				restarts, maxEventLoopRestarts, r, debug.Stack())
+
+			if int(restarts) < maxEventLoopRestarts {
+				e.eventLoop(e.mainCtx) // Restart the event loop
+			} else {
+				logger.Error("max event loop restarts reached, stopping engine")
+				go e.Stop() // async to avoid deadlock
+			}
+		}
+	}()
+
+	for {
+		// Get current stream channels (nil when not streaming)
+		e.mu.RLock()
+		linesChan := e.streamLinesChan
+		tokenChan := e.tokenStreamChan
+		e.mu.RUnlock()
+
+		select {
+		case <-ctx.Done():
+			return
+
+		case line, ok := <-linesChan:
+			e.mu.Lock()
+			if e.stopped {
+				e.mu.Unlock()
+				return
+			}
+			if e.streamLinesChan != linesChan {
+				e.mu.Unlock()
+				continue
+			}
+			if !ok {
+				e.handleStreamCompleteSimple()
+				e.mu.Unlock()
+				continue
+			}
+			e.streamLineNum++
+			e.handleStreamLine(line)
+			e.mu.Unlock()
+
+		case text, ok := <-tokenChan:
+			e.mu.Lock()
+			if e.stopped {
+				e.mu.Unlock()
+				return
+			}
+			if e.tokenStreamChan != tokenChan {
+				e.mu.Unlock()
+				continue
+			}
+			if !ok {
+				e.handleTokenStreamComplete()
+				e.mu.Unlock()
+				continue
+			}
+			e.handleTokenChunk(text)
+			e.mu.Unlock()
+
+		case event, ok := <-e.eventChan:
+			if !ok {
+				return
+			}
+
+			e.mu.RLock()
+			stopped := e.stopped
+			e.mu.RUnlock()
+
+			if stopped {
+				return
+			}
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("event handler panic recovered for event %v: %v", event.Type, r)
+					}
+				}()
+				e.handleEvent(event)
+			}()
+		}
+	}
+}
+
+func (e *Engine) handleEvent(event Event) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.stopped {
+		return
+	}
+
+	logger.Debug("handle event: %v (state=%s)", event.Type, e.state)
+	defer func() {
+		logger.Debug("after event: %v (state=%s)", event.Type, e.state)
+	}()
+
+	// Layer 1: Background/async results
+	if e.handleBackgroundEvent(event) {
+		return
+	}
+
+	// Layer 2: Dispatch table for user/timer events
+	e.dispatch(event)
+}
+
+// handleBackgroundEvent handles async completion and prefetch results.
+func (e *Engine) handleBackgroundEvent(event Event) bool {
+	switch event.Type {
+	case EventCompletionReady:
+		if e.state != statePendingCompletion {
+			return true
+		}
+		e.handleCompletionReadyImpl(event.Data.(*types.CompletionResponse))
+		return true
+
+	case EventCompletionError:
+		if err, ok := event.Data.(error); !ok || !errors.Is(err, context.Canceled) {
+			logger.Error("completion error: %v", event.Data)
+		}
+		return true
+
+	case EventPrefetchReady:
+		if e.prefetchState != prefetchInFlight &&
+			e.prefetchState != prefetchWaitingForTab &&
+			e.prefetchState != prefetchWaitingForCursorPrediction {
+			return true
+		}
+		e.handlePrefetchReady(event.Data.(*types.CompletionResponse))
+		return true
+
+	case EventPrefetchError:
+		if e.prefetchState != prefetchInFlight &&
+			e.prefetchState != prefetchWaitingForTab &&
+			e.prefetchState != prefetchWaitingForCursorPrediction {
+			return true
+		}
+		if err, ok := event.Data.(error); ok {
+			e.handlePrefetchError(err)
+		} else {
+			e.handlePrefetchError(nil)
+		}
+		return true
+	}
+	return false
+}
+
+// Action functions for state transitions
 
 func (e *Engine) doRequestCompletion(event Event) {
 	e.requestCompletion(types.CompletionSourceTyping)
-	// Note: requestCompletion sets state = statePendingCompletion
 }
 
 func (e *Engine) doRequestIdleCompletion(event Event) {
@@ -176,7 +386,6 @@ func (e *Engine) doStartTextChangeTimer(event Event) {
 }
 
 func (e *Engine) doTextChangePending(event Event) {
-	// Cancel in-flight request and restart debounce
 	if e.currentCancel != nil {
 		e.currentCancel()
 		e.currentCancel = nil
@@ -202,17 +411,25 @@ func (e *Engine) doRejectAndStartIdleTimer(event Event) {
 
 func (e *Engine) doAcceptCompletion(event Event) {
 	e.acceptCompletion()
-	// Note: acceptCompletion handles state transitions internally
 }
 
 func (e *Engine) doAcceptCursorTarget(event Event) {
 	e.acceptCursorTarget()
-	// Note: acceptCursorTarget handles state transitions internally
 }
 
 func (e *Engine) doTextChangeWithCompletion(event Event) {
 	e.handleTextChangeImpl()
-	// Note: handleTextChangeImpl handles state transitions internally
+}
+
+func (e *Engine) doPartialAcceptCompletion(event Event) {
+	e.partialAcceptCompletion()
+}
+
+func (e *Engine) doPartialAcceptStreaming(event Event) {
+	if e.streamingState != nil && e.streamingState.FirstStageRendered {
+		e.cancelLineStreamingKeepPartial()
+		e.partialAcceptCompletion()
+	}
 }
 
 // Streaming state action functions
