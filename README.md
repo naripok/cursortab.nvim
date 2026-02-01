@@ -425,6 +425,19 @@ Use your Neovim plugin manager to pull the latest changes, then run
 
 </details>
 
+<details>
+<summary>Why isn't my API key or environment variable being picked up?</summary>
+
+The plugin runs a background daemon that persists after Neovim closes. Environment
+variables are only loaded when the daemon starts. If you add or change an
+environment variable (e.g., `SWEEPAPI_TOKEN` in your `.zshrc`), simply restarting
+Neovim or your shell won't update the daemon.
+
+**Solution:** Run `:CursortabRestart` to restart the daemon with the new
+environment variables.
+
+</details>
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or a pull request.
