@@ -235,46 +235,6 @@ DEBUG OPTIONS                                          *cursortab-config-debug*
       Shutdown daemon immediately when no clients are connected. Useful for
       development.
 
-------------------------------------------------------------------------------
-DEPRECATED OPTIONS                               *cursortab-config-deprecated*
-
-The following flat configuration keys are deprecated but still supported.
-They will be automatically migrated to the new nested structure:
-
-  Old Key                    New Path ~
-  `deletion_color`             ui.colors.deletion
-  `addition_color`             ui.colors.addition
-  `modification_color`         ui.colors.modification
-  `completion_color`           ui.colors.completion
-  `jump_symbol`                ui.jump.symbol
-  `jump_text`                  ui.jump.text
-  `jump_show_distance`         ui.jump.show_distance
-  `jump_bg_color`              ui.jump.bg_color
-  `jump_fg_color`              ui.jump.fg_color
-  `idle_completion_delay`      behavior.idle_completion_delay
-  `text_changed_debounce`      behavior.text_change_debounce
-  `completion_timeout`         provider.completion_timeout
-  `cursor_prediction`          behavior.cursor_prediction
-  `provider`                   provider.type
-  `provider_url`               provider.url
-  `provider_model`             provider.model
-  `provider_temperature`       provider.temperature
-  `provider_max_tokens`        provider.max_tokens
-  `provider_top_k`             provider.top_k
-  `max_context_tokens`         provider.max_context_tokens
-  `max_diff_history_tokens`    provider.max_diff_history_tokens
-  `debug_immediate_shutdown`   debug.immediate_shutdown
-
-The following nested fields have been renamed:
-
-  Old Field                                    New Field ~
-  `behavior.cursor_prediction.dist_threshold`    behavior.cursor_prediction.proximity_threshold
-
-The following options have been removed and no longer have any effect:
-
-  `event_debounce`             Removed (hardcoded internally)
-  `debug_color`                Removed (unused)
-
 ==============================================================================
 COMMANDS                                                   *cursortab-commands*
 

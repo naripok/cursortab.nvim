@@ -133,44 +133,14 @@ local default_config = {
 
 -- Deprecated field mappings (old flat field -> new nested path)
 -- A nil value means the option was removed entirely
-local deprecated_mappings = {
-	-- UI colors (old -> new)
-	deletion_color = { "ui", "colors", "deletion" },
-	addition_color = { "ui", "colors", "addition" },
-	modification_color = { "ui", "colors", "modification" },
-	completion_color = { "ui", "colors", "completion" },
-	-- UI jump (old -> new)
-	jump_symbol = { "ui", "jump", "symbol" },
-	jump_text = { "ui", "jump", "text" },
-	jump_show_distance = { "ui", "jump", "show_distance" },
-	jump_bg_color = { "ui", "jump", "bg_color" },
-	jump_fg_color = { "ui", "jump", "fg_color" },
-	-- Behavior (old -> new)
-	idle_completion_delay = { "behavior", "idle_completion_delay" },
-	text_changed_debounce = { "behavior", "text_change_debounce" },
-	completion_timeout = { "provider", "completion_timeout" },
-	cursor_prediction = { "behavior", "cursor_prediction" },
-	-- Provider (old -> new)
-	provider = { "provider", "type" },
-	provider_url = { "provider", "url" },
-	provider_model = { "provider", "model" },
-	provider_temperature = { "provider", "temperature" },
-	provider_max_tokens = { "provider", "max_tokens" },
-	provider_top_k = { "provider", "top_k" },
-	max_context_tokens = nil, -- Removed: now driven by max_tokens with 80% headroom
-	max_diff_history_tokens = { "provider", "max_diff_history_tokens" },
-	-- Debug (old -> new)
-	debug_immediate_shutdown = { "debug", "immediate_shutdown" },
-	-- Removed options (nil = no migration, just warn)
-	event_debounce = nil,
-	debug_color = nil,
-}
+-- Example: old_field = { "new", "nested", "path" }
+-- Example: removed_field = nil
+local deprecated_mappings = {}
 
 -- Nested field renames (old nested field -> new field name within same parent)
 -- Format: { path = { "path", "to", "parent" }, old = "old_field", new = "new_field" }
-local nested_field_renames = {
-	{ path = { "behavior", "cursor_prediction" }, old = "dist_threshold", new = "proximity_threshold" },
-}
+-- Example: { path = { "behavior", "cursor_prediction" }, old = "dist_threshold", new = "proximity_threshold" }
+local nested_field_renames = {}
 
 -- Migrate deprecated flat config to new nested structure
 ---@param user_config table
@@ -274,9 +244,27 @@ end
 local valid_provider_types = { inline = true, fim = true, sweep = true, zeta = true }
 local valid_log_levels = { trace = true, debug = true, info = true, warn = true, error = true }
 
+-- Validate that all keys in user config exist in default config
+---@param user_cfg table User configuration
+---@param default_cfg table Default configuration
+---@param path string Current path for error messages
+local function validate_config_keys(user_cfg, default_cfg, path)
+	for key, value in pairs(user_cfg) do
+		if default_cfg[key] == nil then
+			error(string.format("[cursortab.nvim] Unknown config option: %s%s", path, key))
+		end
+		-- Recursively validate nested tables
+		if type(value) == "table" and type(default_cfg[key]) == "table" then
+			validate_config_keys(value, default_cfg[key], path .. key .. ".")
+		end
+	end
+end
+
 -- Validate configuration values
 ---@param cfg table
 local function validate_config(cfg)
+	-- First, validate that all keys are recognized
+	validate_config_keys(cfg, default_config, "")
 	-- Validate keymaps.accept (must be string or false)
 	if cfg.keymaps and cfg.keymaps.accept ~= nil then
 		local accept = cfg.keymaps.accept
@@ -325,15 +313,6 @@ local function validate_config(cfg)
 		end
 		if cfg.provider.max_diff_history_tokens and cfg.provider.max_diff_history_tokens < 0 then
 			error("[cursortab.nvim] provider.max_diff_history_tokens must be >= 0")
-		end
-		if cfg.provider.max_context_tokens ~= nil then
-			vim.schedule(function()
-				vim.notify(
-					"[cursortab.nvim] provider.max_context_tokens has been removed.\n"
-						.. "Input context is now derived from provider.max_tokens.",
-					vim.log.levels.WARN
-				)
-			end)
 		end
 		if cfg.provider.completion_path and not cfg.provider.completion_path:match("^/") then
 			error("[cursortab.nvim] provider.completion_path must start with '/'")
