@@ -94,14 +94,14 @@ local function setup_keymaps()
 		current_keymaps.partial_accept = nil
 	end
 
-	-- Set up new keymaps (only if not nil)
-	if cfg.keymaps.accept ~= nil then
+	-- Set up new keymaps
+	if cfg.keymaps.accept then
 		local accept_key = cfg.keymaps.accept --[[@as string]]
 		vim.keymap.set("i", accept_key, on_accept, { noremap = true, silent = true, expr = true })
 		vim.keymap.set("n", accept_key, on_accept, { noremap = true, silent = true, expr = true })
 		current_keymaps.accept = accept_key
 	end
-	if cfg.keymaps.partial_accept ~= nil then
+	if cfg.keymaps.partial_accept then
 		local partial_key = cfg.keymaps.partial_accept --[[@as string]]
 		vim.keymap.set("i", partial_key, on_partial_accept, { noremap = true, silent = true, expr = true })
 		vim.keymap.set("n", partial_key, on_partial_accept, { noremap = true, silent = true, expr = true })
