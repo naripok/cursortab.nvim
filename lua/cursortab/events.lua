@@ -86,20 +86,22 @@ local function setup_keymaps()
 	if current_keymaps.accept and current_keymaps.accept ~= cfg.keymaps.accept then
 		pcall(vim.keymap.del, "i", current_keymaps.accept)
 		pcall(vim.keymap.del, "n", current_keymaps.accept)
+		current_keymaps.accept = nil
 	end
 	if current_keymaps.partial_accept and current_keymaps.partial_accept ~= cfg.keymaps.partial_accept then
 		pcall(vim.keymap.del, "i", current_keymaps.partial_accept)
 		pcall(vim.keymap.del, "n", current_keymaps.partial_accept)
+		current_keymaps.partial_accept = nil
 	end
 
-	-- Set up new keymaps
-	if cfg.keymaps.accept then
+	-- Set up new keymaps (only if not nil)
+	if cfg.keymaps.accept ~= nil then
 		local accept_key = cfg.keymaps.accept --[[@as string]]
 		vim.keymap.set("i", accept_key, on_accept, { noremap = true, silent = true, expr = true })
 		vim.keymap.set("n", accept_key, on_accept, { noremap = true, silent = true, expr = true })
 		current_keymaps.accept = accept_key
 	end
-	if cfg.keymaps.partial_accept then
+	if cfg.keymaps.partial_accept ~= nil then
 		local partial_key = cfg.keymaps.partial_accept --[[@as string]]
 		vim.keymap.set("i", partial_key, on_partial_accept, { noremap = true, silent = true, expr = true })
 		vim.keymap.set("n", partial_key, on_partial_accept, { noremap = true, silent = true, expr = true })

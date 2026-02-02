@@ -199,7 +199,4 @@ function M.setup(user_config)
 	events.setup()
 end
 
--- Auto-initialize with default settings
-M.setup()
-
 return M
