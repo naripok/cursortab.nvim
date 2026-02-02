@@ -267,6 +267,10 @@ func (e *Engine) RegisterEventHandler() {
 // Timer management
 
 func (e *Engine) startIdleTimer() {
+	// When delay is -1, idle completions are disabled
+	if e.config.IdleCompletionDelay < 0 {
+		return
+	}
 	e.stopIdleTimer()
 	e.idleTimer = e.clock.AfterFunc(e.config.IdleCompletionDelay, func() {
 		e.mu.RLock()
@@ -298,6 +302,10 @@ func (e *Engine) resetIdleTimer() {
 }
 
 func (e *Engine) startTextChangeTimer() {
+	// When debounce is -1, automatic text change completions are disabled
+	if e.config.TextChangeDebounce < 0 {
+		return
+	}
 	e.stopTextChangeTimer()
 	e.textChangeTimer = e.clock.AfterFunc(e.config.TextChangeDebounce, func() {
 		e.mu.RLock()

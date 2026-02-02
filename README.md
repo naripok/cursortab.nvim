@@ -81,6 +81,7 @@ require("cursortab").setup({
   keymaps = {
     accept = "<Tab>",           -- Keymap to accept completion, or false to disable
     partial_accept = "<S-Tab>", -- Keymap to partially accept, or false to disable
+    trigger = false,            -- Keymap to manually trigger completion, or false to disable
   },
 
   ui = {
@@ -101,7 +102,7 @@ require("cursortab").setup({
 
   behavior = {
     idle_completion_delay = 50,  -- Delay in ms after idle to trigger completion (-1 to disable)
-    text_change_debounce = 50,   -- Debounce in ms after text change to trigger completion
+    text_change_debounce = 50,   -- Debounce in ms after text change to trigger completion (-1 to disable)
     max_visible_lines = 0,       -- Max visible lines per completion (0 to disable)
     cursor_prediction = {
       enabled = true,            -- Show jump indicators after completions
@@ -429,10 +430,10 @@ Use your Neovim plugin manager to pull the latest changes, then run
 <details>
 <summary>Why isn't my API key or environment variable being picked up?</summary>
 
-The plugin runs a background daemon that persists after Neovim closes. Environment
-variables are only loaded when the daemon starts. If you add or change an
-environment variable (e.g., `SWEEPAPI_TOKEN` in your `.zshrc`), simply restarting
-Neovim or your shell won't update the daemon.
+The plugin runs a background daemon that persists after Neovim closes.
+Environment variables are only loaded when the daemon starts. If you add or
+change an environment variable (e.g., `SWEEPAPI_TOKEN` in your `.zshrc`), simply
+restarting Neovim or your shell won't update the daemon.
 
 **Solution:** Run `:CursortabRestart` to restart the daemon with the new
 environment variables.

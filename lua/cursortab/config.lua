@@ -53,6 +53,7 @@
 ---@class CursortabKeymapsConfig
 ---@field accept string|false Accept keymap (e.g., "<Tab>"), or false to disable
 ---@field partial_accept string|false Partial accept keymap (e.g., "<S-Tab>"), or false to disable
+---@field trigger string|false Trigger completion keymap (e.g., "<C-Space>"), or false to disable
 
 ---@class CursortabBlinkConfig
 ---@field enabled boolean
@@ -79,6 +80,7 @@ local default_config = {
 	keymaps = {
 		accept = "<Tab>", -- Keymap to accept completion, or false to disable
 		partial_accept = "<S-Tab>", -- Keymap to partially accept completion, or false to disable
+		trigger = false, -- Keymap to manually trigger completion, or false to disable (default: false)
 	},
 
 	ui = {
@@ -305,8 +307,8 @@ local function validate_config(cfg)
 		if cfg.behavior.idle_completion_delay and cfg.behavior.idle_completion_delay < -1 then
 			error("[cursortab.nvim] behavior.idle_completion_delay must be >= -1")
 		end
-		if cfg.behavior.text_change_debounce and cfg.behavior.text_change_debounce < 0 then
-			error("[cursortab.nvim] behavior.text_change_debounce must be >= 0")
+		if cfg.behavior.text_change_debounce and cfg.behavior.text_change_debounce < -1 then
+			error("[cursortab.nvim] behavior.text_change_debounce must be >= -1 (-1 to disable)")
 		end
 		if cfg.behavior.max_visible_lines and cfg.behavior.max_visible_lines < 0 then
 			error("[cursortab.nvim] behavior.max_visible_lines must be >= 0 (0 to disable)")

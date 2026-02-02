@@ -12,8 +12,8 @@ local events = {}
 local autocommands_setup_done = false
 
 -- Track currently bound keys so we can clean them up on re-setup
----@type {accept: string|nil, partial_accept: string|nil}
-local current_keymaps = { accept = nil, partial_accept = nil }
+---@type {accept: string|nil, partial_accept: string|nil, trigger: string|nil}
+local current_keymaps = { accept = nil, partial_accept = nil, trigger = nil }
 
 -- Skip exactly one TextChanged after accepting a completion
 ---@type boolean
@@ -78,6 +78,11 @@ local function on_partial_accept()
 	end
 end
 
+-- Manual trigger handler
+local function on_trigger()
+	daemon.send_event_immediate("trigger_completion")
+end
+
 -- Set up keymaps (can be called multiple times when config changes)
 local function setup_keymaps()
 	local cfg = config.get()
@@ -107,6 +112,20 @@ local function setup_keymaps()
 		vim.keymap.set("n", partial_key, on_partial_accept, { noremap = true, silent = true, expr = true })
 		current_keymaps.partial_accept = partial_key
 	end
+
+	-- Handle trigger keymap
+	if current_keymaps.trigger and current_keymaps.trigger ~= cfg.keymaps.trigger then
+		pcall(vim.keymap.del, "i", current_keymaps.trigger)
+		pcall(vim.keymap.del, "n", current_keymaps.trigger)
+		current_keymaps.trigger = nil
+	end
+	if cfg.keymaps.trigger then
+		local trigger_key = cfg.keymaps.trigger --[[@as string]]
+		vim.keymap.set("i", trigger_key, on_trigger, { noremap = true, silent = true })
+		vim.keymap.set("n", trigger_key, on_trigger, { noremap = true, silent = true })
+		current_keymaps.trigger = trigger_key
+	end
+
 	vim.keymap.set("n", "<Esc>", on_escape, { noremap = true, silent = true, expr = true })
 end
 

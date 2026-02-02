@@ -51,6 +51,7 @@ Full configuration with defaults: >lua
     keymaps = {
       accept = "<Tab>",           -- Keymap to accept completion, or false to disable
       partial_accept = "<S-Tab>", -- Keymap to partially accept, or false to disable
+      trigger = false,            -- Keymap to manually trigger completion, or false to disable
     },
 
     ui = {
@@ -71,7 +72,7 @@ Full configuration with defaults: >lua
 
     behavior = {
       idle_completion_delay = 50,   -- ms, -1 to disable
-      text_change_debounce = 50,    -- ms
+      text_change_debounce = 50,    -- ms, -1 to disable
       max_visible_lines = 0,        -- max visible lines per completion, 0 to disable
       cursor_prediction = {
         enabled = true,
@@ -126,6 +127,22 @@ keymaps.partial_accept                  *cursortab-config-keymaps-partial-accept
   a time. Can be a keymap string (e.g., "<S-Tab>") or `false` to disable.
   Default: "<S-Tab>".
 
+keymaps.trigger                              *cursortab-config-keymaps-trigger*
+
+  The keymap to manually trigger a completion. For fully manual completions,
+  disable both automatic triggers: >lua
+
+    behavior = {
+      text_change_debounce = -1,   -- Disable auto-trigger on typing
+      idle_completion_delay = -1,  -- Disable auto-trigger on idle
+    },
+    keymaps = {
+      trigger = "<C-Space>",  -- Manual trigger
+    },
+<
+  Can be a keymap string (e.g., "<C-Space>") or `false` to disable.
+  Default: false (disabled).
+
 ------------------------------------------------------------------------------
 UI OPTIONS                                                *cursortab-config-ui*
 
@@ -153,6 +170,8 @@ BEHAVIOR OPTIONS                                    *cursortab-config-behavior*
 
   `text_change_debounce`
       Debounce in milliseconds after text changes before triggering completion.
+      Set to -1 to disable automatic completions on text change. This is useful
+      when combined with `keymaps.trigger` for manual-only completion triggering.
 
   `max_visible_lines`
       Maximum visible lines per completion. When set to a positive value,

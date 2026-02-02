@@ -84,8 +84,8 @@ func (c *Config) Validate() error {
 	if c.Behavior.IdleCompletionDelay < -1 {
 		return fmt.Errorf("invalid behavior.idle_completion_delay %d: must be >= -1", c.Behavior.IdleCompletionDelay)
 	}
-	if c.Behavior.TextChangeDebounce < 0 {
-		return fmt.Errorf("invalid behavior.text_change_debounce %d: must be >= 0", c.Behavior.TextChangeDebounce)
+	if c.Behavior.TextChangeDebounce < -1 {
+		return fmt.Errorf("invalid behavior.text_change_debounce %d: must be >= -1", c.Behavior.TextChangeDebounce)
 	}
 	if c.Behavior.MaxVisibleLines < 0 {
 		return fmt.Errorf("invalid behavior.max_visible_lines %d: must be >= 0", c.Behavior.MaxVisibleLines)
