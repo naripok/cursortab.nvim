@@ -197,6 +197,11 @@ function M.setup(user_config)
 
 	-- Setup events and autocommands
 	events.setup()
+
+	-- Start the daemon (non-blocking)
+	vim.defer_fn(function()
+		daemon.force_start()
+	end, 0)
 end
 
 return M
