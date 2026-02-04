@@ -1790,6 +1790,116 @@ func TestIncrementalStageBuilder_EmptyLineFilledWithContent(t *testing.T) {
 	assert.Equal(t, 3, firstGroup.BufferLine, "buffer line")
 }
 
+// TestIncrementalStageBuilder_TrailingWhitespaceModification verifies that when the old line
+// has trailing whitespace, the prefix matching still correctly identifies it as a modification.
+// Without this fix, the modification would be classified as an addition during streaming,
+// causing buffer_line to be off by 1.
+func TestIncrementalStageBuilder_TrailingWhitespaceModification(t *testing.T) {
+	oldLines := []string{
+		"func main() {",
+		"    x  ", // trailing whitespace
+	}
+
+	builder := NewIncrementalStageBuilder(
+		oldLines,
+		1,    // baseLineOffset
+		10,   // proximityThreshold
+		0,    // maxVisibleLines (disabled)
+		0, 0, // viewport disabled
+		2, 5, // cursorRow=2, cursorCol=5
+		"test.go",
+	)
+
+	builder.AddLine("func main() {")
+	builder.AddLine("    x = getValue()")      // modification of "    x  "
+	builder.AddLine("    y = processValue(x)") // addition
+
+	result := builder.Finalize()
+	assert.NotNil(t, result, "expected staging result")
+	assert.Equal(t, 1, len(result.Stages), "stage count")
+
+	stage := result.Stages[0]
+
+	// BufferStart should be 2 (where the modification is)
+	assert.Equal(t, 2, stage.BufferStart, "BufferStart")
+
+	// The modification group should have BufferLine = 2
+	var modGroup *Group
+	for _, g := range stage.Groups {
+		if g.Type == "modification" {
+			modGroup = g
+			break
+		}
+	}
+	assert.NotNil(t, modGroup, "should have a modification group")
+	assert.Equal(t, 2, modGroup.BufferLine, "modification BufferLine")
+
+	// The addition group should have BufferLine = 3 (below the modification)
+	var addGroup *Group
+	for _, g := range stage.Groups {
+		if g.Type == "addition" {
+			addGroup = g
+			break
+		}
+	}
+	assert.NotNil(t, addGroup, "should have an addition group")
+	assert.Equal(t, 3, addGroup.BufferLine, "addition BufferLine")
+}
+
+// TestIncrementalStageBuilder_WhitespaceOnlyLineModification verifies that when the old line
+// is whitespace-only (not empty), the matching correctly identifies it as a modification target.
+func TestIncrementalStageBuilder_WhitespaceOnlyLineModification(t *testing.T) {
+	oldLines := []string{
+		"func main() {",
+		"    ", // whitespace-only line (4 spaces)
+	}
+
+	builder := NewIncrementalStageBuilder(
+		oldLines,
+		1,    // baseLineOffset
+		10,   // proximityThreshold
+		0,    // maxVisibleLines (disabled)
+		0, 0, // viewport disabled
+		2, 4, // cursorRow=2, cursorCol=4
+		"test.go",
+	)
+
+	builder.AddLine("func main() {")
+	builder.AddLine("    x = getValue()")      // modification of whitespace-only line
+	builder.AddLine("    y = processValue(x)") // addition
+
+	result := builder.Finalize()
+	assert.NotNil(t, result, "expected staging result")
+	assert.Equal(t, 1, len(result.Stages), "stage count")
+
+	stage := result.Stages[0]
+
+	// BufferStart should be 2 (where the whitespace-only line is)
+	assert.Equal(t, 2, stage.BufferStart, "BufferStart")
+
+	// The modification group should have BufferLine = 2
+	var modGroup *Group
+	for _, g := range stage.Groups {
+		if g.Type == "modification" {
+			modGroup = g
+			break
+		}
+	}
+	assert.NotNil(t, modGroup, "should have a modification group")
+	assert.Equal(t, 2, modGroup.BufferLine, "modification BufferLine")
+
+	// The addition group should have BufferLine = 3 (below the modification)
+	var addGroup *Group
+	for _, g := range stage.Groups {
+		if g.Type == "addition" {
+			addGroup = g
+			break
+		}
+	}
+	assert.NotNil(t, addGroup, "should have an addition group")
+	assert.Equal(t, 3, addGroup.BufferLine, "addition BufferLine")
+}
+
 // TestLineSimilarity_EdgeCases tests similarity calculation edge cases.
 func TestLineSimilarity_EdgeCases(t *testing.T) {
 	tests := []struct {

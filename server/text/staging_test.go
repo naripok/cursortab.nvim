@@ -2303,3 +2303,64 @@ func TestModificationBufferLineUsesOldLinePosition(t *testing.T) {
 	assert.Equal(t, 6, modGroup.BufferLine,
 		"modification BufferLine should match old line position (6), not relative position")
 }
+
+// TestCreateStages_TrailingWhitespaceModification verifies non-streaming staging
+// handles trailing whitespace correctly when the old line has trailing spaces
+// and the new line is a completion of that content.
+func TestCreateStages_TrailingWhitespaceModification(t *testing.T) {
+	oldLines := []string{
+		"func main() {",
+		"    x  ", // trailing whitespace
+	}
+	newLines := []string{
+		"func main() {",
+		"    x = getValue()",      // modification of "    x  "
+		"    y = processValue(x)", // addition
+	}
+
+	oldText := JoinLines(oldLines)
+	newText := JoinLines(newLines)
+	diff := ComputeDiff(oldText, newText)
+
+	result := CreateStages(
+		diff,
+		2, 5, // cursorRow=2, cursorCol=5
+		0, 0, // viewport disabled
+		1,  // baseLineOffset
+		10, // proximityThreshold
+		0,  // maxLines (disabled)
+		"test.go",
+		newLines,
+		oldLines,
+	)
+
+	assert.NotNil(t, result, "expected staging result")
+	assert.Equal(t, 1, len(result.Stages), "stage count")
+
+	stage := result.Stages[0]
+
+	// BufferStart should be 2 (where the modification is)
+	assert.Equal(t, 2, stage.BufferStart, "BufferStart")
+
+	// The modification group should have BufferLine = 2
+	var modGroup *Group
+	for _, g := range stage.Groups {
+		if g.Type == "modification" {
+			modGroup = g
+			break
+		}
+	}
+	assert.NotNil(t, modGroup, "should have a modification group")
+	assert.Equal(t, 2, modGroup.BufferLine, "modification BufferLine")
+
+	// The addition group should have BufferLine = 3 (below the modification)
+	var addGroup *Group
+	for _, g := range stage.Groups {
+		if g.Type == "addition" {
+			addGroup = g
+			break
+		}
+	}
+	assert.NotNil(t, addGroup, "should have an addition group")
+	assert.Equal(t, 3, addGroup.BufferLine, "addition BufferLine")
+}

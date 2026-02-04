@@ -111,11 +111,12 @@ func (b *IncrementalDiffBuilder) findMatchingOldLine(newLine string, _ int) int 
 		if b.OldLines[expectedPos] == newLine {
 			return expectedPos + 1 // 1-indexed
 		}
-		// Check if old line at expected position is empty and new line has content.
-		// Empty lines should match non-empty content because filling an empty line
-		// is a modification (append_chars), not an addition. This is critical for
-		// cursor-on-empty-line scenarios where ghost text should appear inline.
-		if b.OldLines[expectedPos] == "" && newLine != "" {
+		// Check if old line at expected position is empty/whitespace-only and new line has content.
+		// These should match because filling an empty or whitespace-only line is a modification
+		// (append_chars), not an addition. This is critical for cursor-on-empty-line scenarios.
+		oldLineTrimmed := strings.TrimSpace(b.OldLines[expectedPos])
+		newLineTrimmed := strings.TrimSpace(newLine)
+		if oldLineTrimmed == "" && newLineTrimmed != "" {
 			return expectedPos + 1 // 1-indexed
 		}
 	}
@@ -139,11 +140,13 @@ func (b *IncrementalDiffBuilder) findMatchingOldLine(newLine string, _ int) int 
 			return i + 1
 		}
 
-		// Check prefix match: if oldLine is a non-empty prefix of newLine,
-		// this is a completion (append_chars). Similarity-based matching fails
-		// when the new line is much longer than the old line, but a prefix
-		// relationship clearly indicates a match.
-		if len(oldLine) > 0 && strings.HasPrefix(newLine, oldLine) {
+		// Check prefix match: if oldLine (trimmed of trailing whitespace) is a
+		// non-empty prefix of newLine, this is a completion (append_chars).
+		// Similarity-based matching fails when the new line is much longer than
+		// the old line, but a prefix relationship clearly indicates a match.
+		// Trailing whitespace is trimmed because it's often insignificant.
+		oldLineTrimmed := strings.TrimRight(oldLine, " \t")
+		if len(oldLineTrimmed) > 0 && strings.HasPrefix(newLine, oldLineTrimmed) {
 			return i + 1
 		}
 
