@@ -467,7 +467,8 @@ func (b *IncrementalStageBuilder) remapChanges(stageNewLines []string, newStartL
 		}
 		if oldLine <= 0 {
 			fallbackOldLine := absoluteNewLine
-			if fallbackOldLine > 0 && fallbackOldLine <= len(b.OldLines) && !usedOldLines[fallbackOldLine] {
+			if fallbackOldLine > 0 && fallbackOldLine <= len(b.OldLines) &&
+				!usedOldLines[fallbackOldLine] && !b.diffBuilder.usedOldLines[fallbackOldLine] {
 				oldLine = fallbackOldLine
 			}
 		}

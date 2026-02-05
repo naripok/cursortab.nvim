@@ -2173,3 +2173,34 @@ func TestIncrementalStageBuilder_LowSimilarityModification(t *testing.T) {
 		})
 	}
 }
+
+func TestIncrementalStageBuilder_InsertedLineIsAddition(t *testing.T) {
+	oldLines := []string{"func main() {", "    return", "}"}
+
+	builder := NewIncrementalStageBuilder(
+		oldLines,
+		1, // baseLineOffset
+		3, // proximityThreshold
+		0, // maxVisibleLines
+		0, 0, // viewport (disabled)
+		1, 0, // cursor at line 1
+		"test.go",
+	)
+
+	// Insert an empty line between line 1 and line 2
+	builder.AddLine("func main() {")
+	builder.AddLine("")
+	builder.AddLine("    return")
+	builder.AddLine("}")
+
+	result := builder.Finalize()
+	assert.NotNil(t, result, "should have staging result")
+	assert.True(t, len(result.Stages) > 0, "should have at least one stage")
+
+	stage := result.Stages[0]
+	assert.True(t, len(stage.Groups) > 0, "should have groups")
+
+	group := stage.Groups[0]
+	assert.Equal(t, "addition", group.Type, "group type")
+	assert.Equal(t, []string{""}, group.Lines, "group lines")
+}
