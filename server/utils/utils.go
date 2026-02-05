@@ -1,5 +1,13 @@
 package utils
 
+// Abs returns the absolute value of an integer
+func Abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
 // Token estimation constants
 const (
 	AvgCharsPerToken = 2 // Conservative estimate for mixed content (code + JSON)
@@ -138,4 +146,3 @@ func TrimDiffEntries[T DiffEntry](diffs []T, maxTokens int) []T {
 	}
 	return diffs
 }
-

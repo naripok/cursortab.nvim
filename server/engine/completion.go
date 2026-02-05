@@ -4,6 +4,7 @@ import (
 	"cursortab/logger"
 	"cursortab/text"
 	"cursortab/types"
+	"cursortab/utils"
 )
 
 // handleCompletionReadyImpl processes a successful completion response.
@@ -159,7 +160,7 @@ func (e *Engine) handleCursorTarget() {
 		return
 	}
 
-	distance := abs(int(e.cursorTarget.LineNumber) - e.buffer.Row())
+	distance := utils.Abs(int(e.cursorTarget.LineNumber) - e.buffer.Row())
 	if distance <= e.config.CursorPrediction.ProximityThreshold {
 		// Close enough - don't show cursor prediction
 
@@ -252,16 +253,12 @@ func (e *Engine) showCurrentStage() {
 	e.currentGroups = stage.Groups
 }
 
-// getStage returns the stage at the given index with type assertion
+// getStage returns the stage at the given index, or nil if out of bounds
 func (e *Engine) getStage(idx int) *text.Stage {
 	if e.stagedCompletion == nil || idx < 0 || idx >= len(e.stagedCompletion.Stages) {
 		return nil
 	}
-	stage, ok := e.stagedCompletion.Stages[idx].(*text.Stage)
-	if !ok {
-		return nil
-	}
-	return stage
+	return e.stagedCompletion.Stages[idx]
 }
 
 // processCompletion is the SINGLE ENTRY POINT for processing all completions.
@@ -284,32 +281,25 @@ func (e *Engine) processCompletion(completion *types.Completion) bool {
 	viewportTop, viewportBottom := e.buffer.ViewportBounds()
 	originalText := text.JoinLines(originalLines)
 	newText := text.JoinLines(completion.Lines)
-	diffResult := text.AnalyzeDiffForStagingWithViewport(
-		originalText, newText,
-		viewportTop, viewportBottom,
-		completion.StartLine,
-	)
+	diffResult := text.ComputeDiff(originalText, newText)
 
-	stagingResult := text.CreateStages(
-		diffResult,
-		e.buffer.Row(),
-		e.buffer.Col(),
-		viewportTop, viewportBottom,
-		completion.StartLine,
-		e.config.CursorPrediction.ProximityThreshold,
-		e.config.MaxVisibleLines,
-		e.buffer.Path(),
-		completion.Lines,
-		originalLines,
-	)
+	stagingResult := text.CreateStages(&text.StagingParams{
+		Diff:               diffResult,
+		CursorRow:          e.buffer.Row(),
+		CursorCol:          e.buffer.Col(),
+		ViewportTop:        viewportTop,
+		ViewportBottom:     viewportBottom,
+		BaseLineOffset:     completion.StartLine,
+		ProximityThreshold: e.config.CursorPrediction.ProximityThreshold,
+		MaxLines:           e.config.MaxVisibleLines,
+		FilePath:           e.buffer.Path(),
+		NewLines:           completion.Lines,
+		OldLines:           originalLines,
+	})
 
 	if stagingResult != nil && len(stagingResult.Stages) > 0 {
-		stagesAny := make([]any, len(stagingResult.Stages))
-		for i, s := range stagingResult.Stages {
-			stagesAny[i] = s
-		}
-		e.stagedCompletion = &types.StagedCompletion{
-			Stages:     stagesAny,
+		e.stagedCompletion = &text.StagedCompletion{
+			Stages:     stagingResult.Stages,
 			CurrentIdx: 0,
 			SourcePath: e.buffer.Path(),
 		}
@@ -331,11 +321,4 @@ func (e *Engine) processCompletion(completion *types.Completion) bool {
 	}
 
 	return false
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
 }

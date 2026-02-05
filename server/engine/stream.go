@@ -5,6 +5,7 @@ import (
 
 	"cursortab/text"
 	"cursortab/types"
+	"cursortab/utils"
 )
 
 // requestStreamingCompletion handles line-by-line streaming completions
@@ -249,13 +250,8 @@ func (e *Engine) handleStreamCompleteSimple() {
 		return
 	}
 
-	// Convert to staged completion format
-	stagesAny := make([]any, len(stagingResult.Stages))
-	for i, s := range stagingResult.Stages {
-		stagesAny[i] = s
-	}
-	e.stagedCompletion = &types.StagedCompletion{
-		Stages:     stagesAny,
+	e.stagedCompletion = &text.StagedCompletion{
+		Stages:     stagingResult.Stages,
 		CurrentIdx: 0,
 		SourcePath: e.buffer.Path(),
 	}
@@ -327,7 +323,7 @@ func (e *Engine) handleStreamCompleteAfterAccept(ss *StreamingState) {
 	}
 
 	// Check distance to determine if show completion or cursor prediction
-	distance := abs(targetLine - e.buffer.Row())
+	distance := utils.Abs(targetLine - e.buffer.Row())
 
 	if distance <= e.config.CursorPrediction.ProximityThreshold {
 		// Close enough - show completion

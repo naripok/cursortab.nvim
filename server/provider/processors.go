@@ -281,25 +281,31 @@ func AnchorTruncation(threshold float64) Postprocessor {
 	}
 }
 
+// checkAnchorPosition validates that a first line anchors within acceptable range.
+// Returns (anchorIdx, maxAllowed, shouldReject).
+func checkAnchorPosition(firstLine string, oldLines []string, maxRatio float64) (int, int, bool) {
+	if len(oldLines) <= 10 {
+		return -1, 0, false
+	}
+	anchorIdx := findAnchorLineFullSearch(firstLine, oldLines)
+	maxAllowed := int(float64(len(oldLines)) * maxRatio)
+	return anchorIdx, maxAllowed, anchorIdx > maxAllowed
+}
+
 // ValidateAnchorPosition returns a postprocessor that validates first line anchors near start
 func ValidateAnchorPosition(maxAnchorRatio float64) Postprocessor {
 	return func(p *Provider, ctx *Context) (*types.CompletionResponse, bool) {
 		newLines := strings.Split(ctx.Result.Text, "\n")
-		oldLines := ctx.Request.Lines[ctx.WindowStart:ctx.WindowEnd]
-
-		if len(newLines) == 0 || len(oldLines) <= 10 {
+		if len(newLines) == 0 {
 			return nil, false
 		}
-
-		firstLineAnchor := findAnchorLineFullSearch(newLines[0], oldLines)
-		maxAllowedAnchor := int(float64(len(oldLines)) * maxAnchorRatio)
-
-		if firstLineAnchor > maxAllowedAnchor {
+		oldLines := ctx.Request.Lines[ctx.WindowStart:ctx.WindowEnd]
+		anchorIdx, maxAllowed, reject := checkAnchorPosition(newLines[0], oldLines, maxAnchorRatio)
+		if reject {
 			logger.Debug("%s: rejected, first line anchors at %d (max allowed %d)",
-				p.Name, firstLineAnchor, maxAllowedAnchor)
+				p.Name, anchorIdx, maxAllowed)
 			return p.EmptyResponse(), true
 		}
-
 		return nil, false
 	}
 }
@@ -309,18 +315,10 @@ func ValidateAnchorPosition(maxAnchorRatio float64) Postprocessor {
 func ValidateFirstLineAnchor(maxAnchorRatio float64) Validator {
 	return func(p *Provider, ctx *Context, firstLine string) error {
 		oldLines := ctx.Request.Lines[ctx.WindowStart:ctx.WindowEnd]
-
-		if len(oldLines) <= 10 {
-			return nil // Not enough lines to validate
-		}
-
-		firstLineAnchor := findAnchorLineFullSearch(firstLine, oldLines)
-		maxAllowedAnchor := int(float64(len(oldLines)) * maxAnchorRatio)
-
-		if firstLineAnchor > maxAllowedAnchor {
+		_, _, reject := checkAnchorPosition(firstLine, oldLines, maxAnchorRatio)
+		if reject {
 			return errors.New("first line anchor position too far from start")
 		}
-
 		return nil
 	}
 }

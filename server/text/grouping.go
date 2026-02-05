@@ -187,7 +187,7 @@ func FinalizeStageGroups(changes map[int]LineChange, newLines []string, ctx *Sta
 }
 
 // CalculateCursorPosition computes optimal cursor position from changes
-// Priority: modifications > additions > char-level > deletions
+// Priority: modifications > additions > append/replace/delete chars > deletions
 // Returns (line, col) where line is 1-indexed and col is 0-indexed
 // Returns (-1, -1) if no cursor positioning is needed
 func CalculateCursorPosition(changes map[int]LineChange, newLines []string) (int, int) {
@@ -195,69 +195,34 @@ func CalculateCursorPosition(changes map[int]LineChange, newLines []string) (int
 		return -1, -1
 	}
 
-	// Check if all changes are deletions (no cursor positioning)
-	allDeletions := true
-	for _, change := range changes {
-		if change.Type != ChangeDeletion {
-			allDeletions = false
+	// Priority order for selecting target line (highest to lowest)
+	priority := []ChangeType{
+		ChangeModification,
+		ChangeAddition,
+		ChangeAppendChars,
+		ChangeReplaceChars,
+		ChangeDeleteChars,
+	}
+
+	targetLine := -1
+	for _, ct := range priority {
+		for lineNum, change := range changes {
+			if change.Type == ct && lineNum > targetLine {
+				targetLine = lineNum
+			}
+		}
+		if targetLine > 0 {
 			break
 		}
-	}
-	if allDeletions {
-		return -1, -1
-	}
-
-	// Find the best target line based on priority
-	var lastModification, lastAddition, lastAppendChars, lastReplaceChars, lastDeleteChars int = -1, -1, -1, -1, -1
-
-	for lineNum, change := range changes {
-		switch change.Type {
-		case ChangeModification:
-			if lineNum > lastModification {
-				lastModification = lineNum
-			}
-		case ChangeAddition:
-			if lineNum > lastAddition {
-				lastAddition = lineNum
-			}
-		case ChangeAppendChars:
-			if lineNum > lastAppendChars {
-				lastAppendChars = lineNum
-			}
-		case ChangeReplaceChars:
-			if lineNum > lastReplaceChars {
-				lastReplaceChars = lineNum
-			}
-		case ChangeDeleteChars:
-			if lineNum > lastDeleteChars {
-				lastDeleteChars = lineNum
-			}
-		}
-	}
-
-	// Priority order: modifications > additions > append/replace/delete chars
-	var targetLine int = -1
-	if lastModification != -1 {
-		targetLine = lastModification
-	} else if lastAddition != -1 {
-		targetLine = lastAddition
-	} else if lastAppendChars != -1 {
-		targetLine = lastAppendChars
-	} else if lastReplaceChars != -1 {
-		targetLine = lastReplaceChars
-	} else if lastDeleteChars != -1 {
-		targetLine = lastDeleteChars
 	}
 
 	if targetLine <= 0 {
 		return -1, -1
 	}
 
-	// Clamp to valid range
 	if targetLine > len(newLines) {
 		targetLine = len(newLines)
 	}
-
 	if targetLine <= 0 {
 		return -1, -1
 	}

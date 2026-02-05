@@ -123,13 +123,9 @@ func (e *Engine) trimFileStateStore(maxFiles int) {
 		entries = append(entries, entry{path, state})
 	}
 
-	for i := 0; i < len(entries)-1; i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[i].state.LastAccessNs < entries[j].state.LastAccessNs {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
-	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].state.LastAccessNs > entries[j].state.LastAccessNs
+	})
 
 	e.fileStateStore = make(map[string]*FileState)
 	for i := 0; i < maxFiles && i < len(entries); i++ {

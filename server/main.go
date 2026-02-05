@@ -65,19 +65,24 @@ type Config struct {
 	Debug    DebugConfig    `json:"debug"`
 }
 
+// validateEnum checks that value is one of the valid options for the named field.
+func validateEnum(value, field string, valid []string) error {
+	for _, v := range valid {
+		if value == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid %s %q: must be one of %s", field, value, strings.Join(valid, ", "))
+}
+
 // Validate checks that the config has valid values.
 // All config must come from the Lua client - no defaults are applied here.
 func (c *Config) Validate() error {
-	// Validate provider type
-	validProviders := map[string]bool{"inline": true, "fim": true, "sweep": true, "sweepapi": true, "zeta": true, "copilot": true}
-	if !validProviders[c.Provider.Type] {
-		return fmt.Errorf("invalid provider.type %q: must be one of inline, fim, sweep, sweepapi, zeta, copilot", c.Provider.Type)
+	if err := validateEnum(c.Provider.Type, "provider.type", []string{"inline", "fim", "sweep", "sweepapi", "zeta", "copilot"}); err != nil {
+		return err
 	}
-
-	// Validate log level
-	validLogLevels := map[string]bool{"trace": true, "debug": true, "info": true, "warn": true, "error": true}
-	if !validLogLevels[c.LogLevel] {
-		return fmt.Errorf("invalid log_level %q: must be one of trace, debug, info, warn, error", c.LogLevel)
+	if err := validateEnum(c.LogLevel, "log_level", []string{"trace", "debug", "info", "warn", "error"}); err != nil {
+		return err
 	}
 
 	// Validate numeric ranges

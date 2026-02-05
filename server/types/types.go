@@ -22,15 +22,6 @@ type CursorPredictionTarget struct {
 	ShouldRetrigger bool
 }
 
-// StagedCompletion holds the queue of pending stages
-// Note: Uses any to avoid circular import with text package
-type StagedCompletion struct {
-	Stages           []any // []*text.Stage - using any to avoid circular import
-	CurrentIdx       int
-	SourcePath       string
-	CumulativeOffset int // Tracks line count drift after each stage accept (for unequal line counts)
-}
-
 // CompletionRequest contains all the context needed for unified completion requests
 type CompletionRequest struct {
 	Source        CompletionSource

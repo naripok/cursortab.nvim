@@ -17,10 +17,10 @@ import (
 
 // CopilotEdit represents a single edit from Copilot NES response
 type CopilotEdit struct {
-	Text     string       `json:"text"`
-	Range    CopilotRange `json:"range"`
-	Command  *CopilotCmd  `json:"command,omitempty"`
-	TextDoc  CopilotDoc   `json:"textDocument"`
+	Text    string       `json:"text"`
+	Range   CopilotRange `json:"range"`
+	Command *CopilotCmd  `json:"command,omitempty"`
+	TextDoc CopilotDoc   `json:"textDocument"`
 }
 
 // CopilotRange represents an LSP range (0-indexed)

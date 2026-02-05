@@ -30,33 +30,33 @@ type StagingResult struct {
 	FirstNeedsNavigation bool
 }
 
+// StagedCompletion holds the queue of pending stages
+type StagedCompletion struct {
+	Stages           []*Stage
+	CurrentIdx       int
+	SourcePath       string
+	CumulativeOffset int // Tracks line count drift after each stage accept (for unequal line counts)
+}
+
+// StagingParams holds all parameters for CreateStages
+type StagingParams struct {
+	Diff               *DiffResult
+	CursorRow          int // 1-indexed buffer coordinate
+	CursorCol          int // 0-indexed
+	ViewportTop        int // 1-indexed buffer coordinate
+	ViewportBottom     int // 1-indexed buffer coordinate
+	BaseLineOffset     int // Where the diff range starts in the buffer (1-indexed)
+	ProximityThreshold int // Max gap between changes to be in same stage
+	MaxLines           int // Max lines per stage (0 to disable)
+	FilePath           string
+	NewLines           []string // New content lines for extracting stage content
+	OldLines           []string // Old content lines for extracting old content in groups
+}
 
 // CreateStages is the main entry point for creating stages from a diff result.
 // Always returns stages (at least 1 stage for non-empty changes).
-//
-// Parameters:
-//   - diff: The diff result from ComputeDiff
-//   - cursorRow: Current cursor row (1-indexed buffer coordinate)
-//   - cursorCol: Current cursor column (0-indexed)
-//   - viewportTop, viewportBottom: Visible viewport (1-indexed buffer coordinates)
-//   - baseLineOffset: Where the diff range starts in the buffer (1-indexed)
-//   - proximityThreshold: Max gap between changes to be in same stage
-//   - maxLines: Max lines per stage (0 to disable)
-//   - filePath: File path for cursor targets
-//   - newLines: New content lines for extracting stage content
-//   - oldLines: Old content lines for extracting old content in groups
-func CreateStages(
-	diff *DiffResult,
-	cursorRow int,
-	cursorCol int,
-	viewportTop, viewportBottom int,
-	baseLineOffset int,
-	proximityThreshold int,
-	maxLines int,
-	filePath string,
-	newLines []string,
-	oldLines []string,
-) *StagingResult {
+func CreateStages(p *StagingParams) *StagingResult {
+	diff := p.Diff
 	if len(diff.Changes) == 0 {
 		return nil
 	}
@@ -64,10 +64,10 @@ func CreateStages(
 	// Step 1: Partition changes by viewport visibility
 	var inViewChanges, outViewChanges []int
 	for lineNum, change := range diff.Changes {
-		bufferLine := diff.LineMapping.GetBufferLine(change, lineNum, baseLineOffset)
+		bufferLine := diff.LineMapping.GetBufferLine(change, lineNum, p.BaseLineOffset)
 
-		isVisible := viewportTop == 0 && viewportBottom == 0 ||
-			(bufferLine >= viewportTop && bufferLine <= viewportBottom)
+		isVisible := p.ViewportTop == 0 && p.ViewportBottom == 0 ||
+			(bufferLine >= p.ViewportTop && bufferLine <= p.ViewportBottom)
 
 		if isVisible {
 			inViewChanges = append(inViewChanges, lineNum)
@@ -80,8 +80,8 @@ func CreateStages(
 	sort.Ints(outViewChanges)
 
 	// Step 2: Group changes into partial stages
-	inViewStages := groupChangesIntoStages(diff, inViewChanges, proximityThreshold, maxLines, baseLineOffset)
-	outViewStages := groupChangesIntoStages(diff, outViewChanges, proximityThreshold, maxLines, baseLineOffset)
+	inViewStages := groupChangesIntoStages(diff, inViewChanges, p.ProximityThreshold, p.MaxLines, p.BaseLineOffset)
+	outViewStages := groupChangesIntoStages(diff, outViewChanges, p.ProximityThreshold, p.MaxLines, p.BaseLineOffset)
 	allStages := append(inViewStages, outViewStages...)
 
 	if len(allStages) == 0 {
@@ -90,8 +90,8 @@ func CreateStages(
 
 	// Step 3: Sort stages by cursor distance
 	sort.SliceStable(allStages, func(i, j int) bool {
-		distI := stageDistanceFromCursor(allStages[i], cursorRow)
-		distJ := stageDistanceFromCursor(allStages[j], cursorRow)
+		distI := stageDistanceFromCursor(allStages[i], p.CursorRow)
+		distJ := stageDistanceFromCursor(allStages[j], p.CursorRow)
 		if distI != distJ {
 			return distI < distJ
 		}
@@ -99,11 +99,11 @@ func CreateStages(
 	})
 
 	// Step 4: Finalize stages (content, cursor targets)
-	finalizeStages(allStages, newLines, filePath, baseLineOffset, diff, cursorRow, cursorCol)
+	finalizeStages(allStages, p.NewLines, p.FilePath, p.BaseLineOffset, diff, p.CursorRow, p.CursorCol)
 
 	// Step 5: Check if first stage needs navigation UI
 	firstNeedsNav := StageNeedsNavigation(
-		allStages[0], cursorRow, viewportTop, viewportBottom, proximityThreshold,
+		allStages[0], p.CursorRow, p.ViewportTop, p.ViewportBottom, p.ProximityThreshold,
 	)
 
 	return &StagingResult{
@@ -406,11 +406,6 @@ func finalizeStages(stages []*Stage, newLines []string, filePath string, baseLin
 		// Clear rawChanges (no longer needed)
 		stage.rawChanges = nil
 	}
-}
-
-// AnalyzeDiffForStagingWithViewport analyzes the diff with viewport-aware grouping
-func AnalyzeDiffForStagingWithViewport(originalText, newText string, viewportTop, viewportBottom, baseLineOffset int) *DiffResult {
-	return ComputeDiff(originalText, newText)
 }
 
 // JoinLines joins a slice of strings with newlines.

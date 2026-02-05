@@ -236,10 +236,10 @@ func TestUtf16OffsetToBytes(t *testing.T) {
 		{"empty string", "", 0, 0},
 		{"ascii only", "hello", 3, 3},
 		{"ascii beyond length", "hi", 10, 2},
-		{"emoji at start", "😀hello", 2, 4},     // emoji is 2 UTF-16 units, 4 bytes
-		{"after emoji", "a😀b", 3, 5},           // 'a'(1) + 😀(4 bytes) = 5
-		{"CJK characters", "你好", 1, 3},         // each CJK is 1 UTF-16 unit but 3 bytes
-		{"mixed content", "a😀你b", 4, 8},        // a(1) + 😀(4) + 你(3) = 8 bytes at UTF-16 pos 4
+		{"emoji at start", "😀hello", 2, 4}, // emoji is 2 UTF-16 units, 4 bytes
+		{"after emoji", "a😀b", 3, 5},       // 'a'(1) + 😀(4 bytes) = 5
+		{"CJK characters", "你好", 1, 3},     // each CJK is 1 UTF-16 unit but 3 bytes
+		{"mixed content", "a😀你b", 4, 8},    // a(1) + 😀(4) + 你(3) = 8 bytes at UTF-16 pos 4
 		{"zero offset", "anything", 0, 0},
 		{"negative offset", "test", -1, 0},
 	}

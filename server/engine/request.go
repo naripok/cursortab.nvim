@@ -7,6 +7,7 @@ import (
 	"cursortab/logger"
 	"cursortab/text"
 	"cursortab/types"
+	"cursortab/utils"
 )
 
 // requestCompletion initiates a completion request.
@@ -200,7 +201,7 @@ func (e *Engine) handlePrefetchCursorPrediction() {
 	}
 
 	// Check distance to determine if show completion or cursor prediction
-	distance := abs(targetLine - e.buffer.Row())
+	distance := utils.Abs(targetLine - e.buffer.Row())
 	if distance <= e.config.CursorPrediction.ProximityThreshold {
 		e.tryShowPrefetchedCompletion()
 	} else {

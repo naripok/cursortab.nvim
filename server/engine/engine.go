@@ -71,7 +71,7 @@ type Engine struct {
 	cursorTarget *types.CursorPredictionTarget
 
 	// Staged completion state (for multi-stage completions)
-	stagedCompletion *types.StagedCompletion
+	stagedCompletion *text.StagedCompletion
 
 	// Original buffer lines when completion was shown (for partial typing optimization)
 	completionOriginalLines []string
@@ -436,4 +436,3 @@ func totalChars(lines []string) int {
 	}
 	return total
 }
-

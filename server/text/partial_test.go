@@ -17,24 +17,24 @@ func TestFindNextWordBoundary(t *testing.T) {
 		{"tab", "foo\tbar", 4},                // "foo\t"
 
 		// Punctuation boundaries
-		{"period", "foo.bar", 4},          // "foo."
-		{"comma", "a, b", 2},              // "a,"
-		{"semicolon", "x;y", 2},           // "x;"
-		{"colon", "key:value", 4},         // "key:"
-		{"exclamation", "wow!really", 4},  // "wow!"
-		{"question", "what?next", 5},      // "what?"
-		{"open paren", "func()", 5},       // "func("
-		{"close paren", ")next", 1},       // ")"
-		{"open bracket", "arr[0]", 4},     // "arr["
-		{"close bracket", "]end", 1},      // "]"
-		{"open brace", "map{}", 4},        // "map{"
-		{"close brace", "}done", 1},       // "}"
-		{"double quote", `say"hi"`, 4},    // `say"`
-		{"single quote", "it's", 3},       // "it'"
-		{"backtick", "code`here", 5},      // "code`"
-		{"less than", "a<b", 2},           // "a<"
-		{"greater than", "a>b", 2},        // "a>"
-		{"slash", "path/to", 5},           // "path/"
+		{"period", "foo.bar", 4},         // "foo."
+		{"comma", "a, b", 2},             // "a,"
+		{"semicolon", "x;y", 2},          // "x;"
+		{"colon", "key:value", 4},        // "key:"
+		{"exclamation", "wow!really", 4}, // "wow!"
+		{"question", "what?next", 5},     // "what?"
+		{"open paren", "func()", 5},      // "func("
+		{"close paren", ")next", 1},      // ")"
+		{"open bracket", "arr[0]", 4},    // "arr["
+		{"close bracket", "]end", 1},     // "]"
+		{"open brace", "map{}", 4},       // "map{"
+		{"close brace", "}done", 1},      // "}"
+		{"double quote", `say"hi"`, 4},   // `say"`
+		{"single quote", "it's", 3},      // "it'"
+		{"backtick", "code`here", 5},     // "code`"
+		{"less than", "a<b", 2},          // "a<"
+		{"greater than", "a>b", 2},       // "a>"
+		{"slash", "path/to", 5},          // "path/"
 
 		// No boundary - accept all
 		{"no boundary", "identifier", 10},

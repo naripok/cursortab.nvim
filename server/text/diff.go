@@ -2,6 +2,7 @@ package text
 
 import (
 	"cursortab/logger"
+	"cursortab/utils"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
@@ -13,19 +14,6 @@ import (
 // - "a\n\n" -> ["a", ""] (2 lines, second is empty)
 // - "a\nb" -> ["a", "b"] (2 lines, no trailing \n)
 func splitLines(text string) []string {
-	lines := strings.Split(text, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines
-}
-
-// splitDiffText splits diff text from diffmatchpatch, removing trailing empty element.
-// diffmatchpatch includes the trailing \n as part of each line's representation,
-// so "line\n" represents ONE line, not two. We need to remove the spurious empty
-// element that strings.Split creates from the trailing \n.
-// Example: "a\nb\n" -> ["a", "b"] (two lines, each originally had trailing \n)
-func splitDiffText(text string) []string {
 	lines := strings.Split(text, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -339,7 +327,7 @@ func processLineDiffsWithMapping(lineDiffs []diffmatchpatch.Diff, result *DiffRe
 
 	for i < len(lineDiffs) {
 		diff := lineDiffs[i]
-		lines := splitDiffText(diff.Text)
+		lines := splitLines(diff.Text)
 
 		switch diff.Type {
 		case diffmatchpatch.DiffEqual:
@@ -360,7 +348,7 @@ func processLineDiffsWithMapping(lineDiffs []diffmatchpatch.Diff, result *DiffRe
 			// Check if this is followed by an insert - potential modification
 			if i+1 < len(lineDiffs) && lineDiffs[i+1].Type == diffmatchpatch.DiffInsert {
 				// This is a delete followed by insert - treat as modification(s)
-				insertLines := splitDiffText(lineDiffs[i+1].Text)
+				insertLines := splitLines(lineDiffs[i+1].Text)
 
 				// Build mapping for the modification region
 				handleModificationsWithMapping(lines, insertLines, oldLineNum, newLineNum,
@@ -629,7 +617,7 @@ func isComplexModification(deletedText, insertedText string) bool {
 	}
 
 	// Large word count difference = complex modification
-	if abs(deletedWords-insertedWords) > 1 {
+	if utils.Abs(deletedWords-insertedWords) > 1 {
 		return true
 	}
 
@@ -651,14 +639,6 @@ func isComplexModification(deletedText, insertedText string) bool {
 
 	// For other cases, be stricter (allow up to 2x difference)
 	return lengthRatio > 2.0 || lengthRatio < 0.5
-}
-
-// abs returns the absolute value of an integer
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 // FindFirstChangedLine compares old lines with new lines and returns the first line number (1-indexed)

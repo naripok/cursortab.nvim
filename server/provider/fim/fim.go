@@ -27,13 +27,10 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	}
 }
 
-// getFIMTokens returns the FIM tokens from config
-func getFIMTokens(config *types.ProviderConfig) (prefix, suffix, middle string) {
-	return config.FIMTokens.Prefix, config.FIMTokens.Suffix, config.FIMTokens.Middle
-}
-
 func buildPrompt(p *provider.Provider, ctx *provider.Context) *openai.CompletionRequest {
-	prefixToken, suffixToken, middleToken := getFIMTokens(p.Config)
+	prefixToken := p.Config.FIMTokens.Prefix
+	suffixToken := p.Config.FIMTokens.Suffix
+	middleToken := p.Config.FIMTokens.Middle
 	var prompt string
 
 	if len(ctx.TrimmedLines) == 0 {

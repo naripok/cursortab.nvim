@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestGetFIMTokens(t *testing.T) {
+func TestFIMTokensFromConfig(t *testing.T) {
 	config := &types.ProviderConfig{
 		FIMTokens: types.FIMTokenConfig{
 			Prefix: "<PRE>",
@@ -18,11 +18,9 @@ func TestGetFIMTokens(t *testing.T) {
 		},
 	}
 
-	prefix, suffix, middle := getFIMTokens(config)
-
-	assert.Equal(t, "<PRE>", prefix, "prefix token")
-	assert.Equal(t, "<SUF>", suffix, "suffix token")
-	assert.Equal(t, "<MID>", middle, "middle token")
+	assert.Equal(t, "<PRE>", config.FIMTokens.Prefix, "prefix token")
+	assert.Equal(t, "<SUF>", config.FIMTokens.Suffix, "suffix token")
+	assert.Equal(t, "<MID>", config.FIMTokens.Middle, "middle token")
 }
 
 func TestBuildPrompt_EmptyLines(t *testing.T) {

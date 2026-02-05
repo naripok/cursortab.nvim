@@ -3,9 +3,11 @@ package logger
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,12 +18,13 @@ var noopFunc = func() {}
 // Returns a no-op function when TRACE level is disabled to avoid overhead.
 // Usage: defer logger.Trace("operation")()
 func Trace(name string) func() {
-	if globalLogger == nil || !globalLogger.shouldLog(LogLevelTrace) {
+	gl := globalLoggerPtr.Load()
+	if gl == nil || !gl.shouldLog(LogLevelTrace) {
 		return noopFunc
 	}
 	start := time.Now()
 	return func() {
-		globalLogger.logWithLevel(LogLevelTrace, "%s: %v", name, time.Since(start))
+		gl.logWithLevel(LogLevelTrace, "%s: %v", name, time.Since(start))
 	}
 }
 
@@ -90,8 +93,8 @@ type LimitedLogger struct {
 	mutex     sync.Mutex
 }
 
-// Global logger instance
-var globalLogger *LimitedLogger
+// Global logger instance (atomic for safe concurrent access)
+var globalLoggerPtr atomic.Pointer[LimitedLogger]
 
 // NewLimitedLogger creates a new LimitedLogger
 func NewLimitedLogger(file *os.File, level LogLevel) *LimitedLogger {
@@ -103,7 +106,7 @@ func NewLimitedLogger(file *os.File, level LogLevel) *LimitedLogger {
 
 	// Count existing lines in the file
 	ll.countExistingLines()
-	globalLogger = ll
+	globalLoggerPtr.Store(ll)
 	return ll
 }
 
@@ -148,46 +151,20 @@ func (ll *LimitedLogger) Fatal(format string, v ...any) {
 	os.Exit(1)
 }
 
+// getLogger returns the global logger or the default fallback.
+func getLogger() *LimitedLogger {
+	if gl := globalLoggerPtr.Load(); gl != nil {
+		return gl
+	}
+	return defaultLogger
+}
+
 // Package-level logging functions that use the global logger (or default if not initialized)
-func Debug(format string, v ...any) {
-	if globalLogger != nil {
-		globalLogger.Debug(format, v...)
-	} else {
-		defaultLogger.Debug(format, v...)
-	}
-}
-
-func Info(format string, v ...any) {
-	if globalLogger != nil {
-		globalLogger.Info(format, v...)
-	} else {
-		defaultLogger.Info(format, v...)
-	}
-}
-
-func Warn(format string, v ...any) {
-	if globalLogger != nil {
-		globalLogger.Warn(format, v...)
-	} else {
-		defaultLogger.Warn(format, v...)
-	}
-}
-
-func Error(format string, v ...any) {
-	if globalLogger != nil {
-		globalLogger.Error(format, v...)
-	} else {
-		defaultLogger.Error(format, v...)
-	}
-}
-
-func Fatal(format string, v ...any) {
-	if globalLogger != nil {
-		globalLogger.Fatal(format, v...)
-	} else {
-		defaultLogger.Fatal(format, v...)
-	}
-}
+func Debug(format string, v ...any) { getLogger().Debug(format, v...) }
+func Info(format string, v ...any)  { getLogger().Info(format, v...) }
+func Warn(format string, v ...any)  { getLogger().Warn(format, v...) }
+func Error(format string, v ...any) { getLogger().Error(format, v...) }
+func Fatal(format string, v ...any) { getLogger().Fatal(format, v...) }
 
 // countExistingLines counts the number of lines in the current log file
 func (ll *LimitedLogger) countExistingLines() {
@@ -232,31 +209,55 @@ func (ll *LimitedLogger) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
-// rotateLogFile trims the log file to keep only the last MaxLogLines lines
+// rotateLogFile trims the log file to keep only the last MaxLogLines/2 lines.
+// Scans bytes from the end to find the cut point, avoiding loading all lines into memory.
 func (ll *LimitedLogger) rotateLogFile() {
-	// Read all lines from the file
-	ll.file.Seek(0, 0)
-	scanner := bufio.NewScanner(ll.file)
-	var lines []string
+	keepLines := MaxLogLines / 2
 
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+	// Get file size
+	size, err := ll.file.Seek(0, io.SeekEnd)
+	if err != nil || size == 0 {
+		return
 	}
 
-	// Keep only the last MaxLogLines
-	if len(lines) > MaxLogLines {
-		lines = lines[len(lines)-MaxLogLines:]
+	// Scan backwards from end to find the byte offset of the keepLines-th newline
+	buf := make([]byte, min(int(size), 64*1024))
+	newlineCount := 0
+	cutOffset := int64(0)
+
+	for pos := size; pos > 0; {
+		readSize := min(int64(len(buf)), pos)
+		pos -= readSize
+		ll.file.Seek(pos, io.SeekStart)
+		n, err := ll.file.Read(buf[:readSize])
+		if err != nil || n == 0 {
+			break
+		}
+		for i := n - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				newlineCount++
+				if newlineCount == keepLines {
+					cutOffset = pos + int64(i) + 1
+					goto found
+				}
+			}
+		}
 	}
 
-	// Truncate and rewrite the file
+found:
+	// Read content from cut point to end
+	ll.file.Seek(cutOffset, io.SeekStart)
+	kept, err := io.ReadAll(ll.file)
+	if err != nil {
+		return
+	}
+
+	// Truncate and rewrite
 	ll.file.Truncate(0)
-	ll.file.Seek(0, 0)
+	ll.file.Seek(0, io.SeekStart)
+	ll.file.Write(kept)
 
-	for _, line := range lines {
-		ll.file.WriteString(line + "\n")
-	}
-
-	ll.lineCount = len(lines)
+	ll.lineCount = keepLines
 }
 
 // Close closes the underlying file

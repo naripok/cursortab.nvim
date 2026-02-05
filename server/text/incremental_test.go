@@ -270,7 +270,7 @@ func TestIncrementalStageBuilder_BaseLineOffset(t *testing.T) {
 		3,      // proximityThreshold
 		0,      // maxVisibleLines (disabled)
 		15, 30, // viewport (lines 15-30 visible)
-		22, 0,  // cursorRow, cursorCol
+		22, 0, // cursorRow, cursorCol
 		"test.ts",
 	)
 
@@ -330,7 +330,7 @@ func TestIncrementalStageBuilder_BaseLineOffsetWithGap(t *testing.T) {
 		2,      // proximityThreshold
 		0,      // maxVisibleLines (disabled)
 		40, 60, // viewport
-		52, 0,  // cursorRow, cursorCol
+		52, 0, // cursorRow, cursorCol
 		"test.go",
 	)
 
@@ -382,7 +382,7 @@ func TestIncrementalStageBuilder_GapDetectionWithSimilarityMatching(t *testing.T
 		3,      // proximityThreshold - gaps > 3 should split stages
 		0,      // maxVisibleLines (disabled)
 		40, 80, // viewport
-		58, 0,  // cursorRow, cursorCol
+		58, 0, // cursorRow, cursorCol
 		"test.ts",
 	)
 
@@ -451,7 +451,7 @@ func TestIncrementalStageBuilder_SimilarityMatchingToSimilarLines(t *testing.T) 
 		3,      // proximityThreshold
 		0,      // maxVisibleLines (disabled)
 		15, 35, // viewport
-		23, 0,  // cursorRow, cursorCol
+		23, 0, // cursorRow, cursorCol
 		"test.ts",
 	)
 
@@ -548,7 +548,7 @@ func TestIncrementalStageBuilder_ConsecutiveOutputMapsToScatteredLines(t *testin
 		1,      // proximityThreshold = 1 (very strict - gap > 1 should split)
 		0,      // maxVisibleLines (disabled)
 		45, 60, // viewport
-		52, 0,  // cursorRow, cursorCol
+		52, 0, // cursorRow, cursorCol
 		"test.go",
 	)
 
@@ -1139,7 +1139,7 @@ func TestIncrementalStageBuilder_EmptyInput(t *testing.T) {
 		3,          // proximityThreshold
 		0,          // maxVisibleLines (disabled)
 		0, 0,       // viewport disabled
-		1, 0,       // cursorRow, cursorCol
+		1, 0, // cursorRow, cursorCol
 		"test.go",
 	)
 
@@ -1546,7 +1546,7 @@ func TestIncrementalStageBuilder_MaxVisibleLines(t *testing.T) {
 	// At this point, stage 1 should have 2 lines (the modification + 1 addition)
 	// and maxVisibleLines should trigger a new stage
 
-	builder.AddLine("    for i in range(n):")           // addition - should be in stage 2
+	builder.AddLine("    for i in range(n):")            // addition - should be in stage 2
 	builder.AddLine("        for j in range(0, n-i-1):") // addition - should be in stage 2
 
 	result := builder.Finalize()
@@ -1606,12 +1606,12 @@ func TestIncrementalStageBuilder_MaxVisibleLines_ThreeStages(t *testing.T) {
 	)
 
 	// Feed the model output
-	builder.AddLine("import numpy as np")             // unchanged
-	builder.AddLine("")                               // unchanged
-	builder.AddLine("def bubble_sort(arr):")          // modification
-	builder.AddLine("    n = len(arr)")               // addition (stage 1 ends here)
-	builder.AddLine("    for i in range(n):")         // addition (stage 2)
-	builder.AddLine("        for j in range(n-i-1):") // addition (stage 2 ends here)
+	builder.AddLine("import numpy as np")                // unchanged
+	builder.AddLine("")                                  // unchanged
+	builder.AddLine("def bubble_sort(arr):")             // modification
+	builder.AddLine("    n = len(arr)")                  // addition (stage 1 ends here)
+	builder.AddLine("    for i in range(n):")            // addition (stage 2)
+	builder.AddLine("        for j in range(n-i-1):")    // addition (stage 2 ends here)
 	builder.AddLine("            if arr[j] > arr[j+1]:") // addition (stage 3)
 	builder.AddLine("                swap(arr, j)")      // addition (stage 3 ends here)
 
@@ -2039,7 +2039,7 @@ func TestIncrementalStageBuilder_AdditionsBeforeCursorModificationAnchoredAtCurs
 // - Completion expands to 4 lines with additions before the modification
 func TestIncrementalStageBuilder_WhitespaceLineExpansion(t *testing.T) {
 	oldLines := []string{
-		"",        // buffer line 5
+		"",         // buffer line 5
 		"        ", // buffer line 6 (cursor line)
 	}
 	builder := NewIncrementalStageBuilder(
@@ -2053,9 +2053,9 @@ func TestIncrementalStageBuilder_WhitespaceLineExpansion(t *testing.T) {
 	)
 
 	// Stream the completion: adds content before cursor line, then modifies cursor line
-	builder.AddLine("    Parameters")                    // modifies empty line or addition
-	builder.AddLine("    ----------")                    // addition
-	builder.AddLine("    rA : numpy array")              // modifies whitespace line
+	builder.AddLine("    Parameters")                      // modifies empty line or addition
+	builder.AddLine("    ----------")                      // addition
+	builder.AddLine("    rA : numpy array")                // modifies whitespace line
 	builder.AddLine("        The coordinates of point A.") // addition
 
 	result := builder.Finalize()

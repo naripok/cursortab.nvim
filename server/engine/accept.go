@@ -4,6 +4,7 @@ import (
 	"cursortab/logger"
 	"cursortab/text"
 	"cursortab/types"
+	"cursortab/utils"
 )
 
 // reject clears all state and returns to idle.
@@ -16,15 +17,6 @@ func (e *Engine) reject() {
 		CallOnReject:      true,
 	})
 	e.state = stateIdle
-}
-
-// clearCompletionState clears completion-related state after accept.
-// Does not affect prefetch, staged completion, or cursor target.
-func (e *Engine) clearCompletionState() {
-	e.completions = nil
-	e.applyBatch = nil
-	e.currentGroups = nil
-	e.completionOriginalLines = nil
 }
 
 // acceptCompletion handles Tab key acceptance of completions.
@@ -56,7 +48,7 @@ func (e *Engine) acceptCompletion() {
 	}
 
 	// 2. Clear completion state (keep prefetch)
-	e.clearCompletionState()
+	e.clearState(ClearOptions{})
 
 	// 3. Check if this is the last stage and prefetch extends beyond it
 	// Must try BEFORE advanceStagedCompletion which may clear the prefetch
@@ -287,7 +279,7 @@ func (e *Engine) transitionAfterAccept() {
 	// Never show cursor target within proximity threshold
 	cursorRow := e.buffer.Row()
 	targetLine := int(e.cursorTarget.LineNumber)
-	distance := abs(targetLine - cursorRow)
+	distance := utils.Abs(targetLine - cursorRow)
 	if distance <= e.config.CursorPrediction.ProximityThreshold {
 		e.buffer.ClearUI()
 		e.cursorTarget = nil
@@ -440,7 +432,7 @@ func (e *Engine) finalizePartialAccept() {
 
 	e.buffer.CommitPending()
 	e.saveCurrentFileState()
-	e.clearCompletionState()
+	e.clearState(ClearOptions{})
 
 	if e.stagedCompletion != nil {
 		e.advanceStagedCompletion()

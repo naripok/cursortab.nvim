@@ -3,6 +3,7 @@ package text
 import (
 	"cursortab/logger"
 	"cursortab/types"
+	"sort"
 	"strings"
 )
 
@@ -96,17 +97,91 @@ func (b *IncrementalDiffBuilder) AddLine(line string) *LineChange {
 	return &change
 }
 
+// matchStrategy is a function that attempts to match a new line to an old line.
+// Returns 1-indexed old line number, or 0 if no match.
+type matchStrategy func(b *IncrementalDiffBuilder, newLine string, expectedPos, searchStart, searchEnd int) int
+
+var matchStrategies = []matchStrategy{
+	// Priority 1: Exact match at expected position
+	func(b *IncrementalDiffBuilder, newLine string, expectedPos, _, _ int) int {
+		if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] && b.OldLines[expectedPos] == newLine {
+			return expectedPos + 1
+		}
+		return 0
+	},
+	// Priority 2: Empty/whitespace old line at expected position with content new line (append_chars)
+	func(b *IncrementalDiffBuilder, newLine string, expectedPos, _, _ int) int {
+		if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] {
+			if strings.TrimSpace(b.OldLines[expectedPos]) == "" && strings.TrimSpace(newLine) != "" {
+				return expectedPos + 1
+			}
+		}
+		return 0
+	},
+	// Priority 3: Exact match anywhere in search window
+	func(b *IncrementalDiffBuilder, newLine string, _, searchStart, searchEnd int) int {
+		for i := searchStart; i < searchEnd; i++ {
+			if !b.usedOldLines[i+1] && b.OldLines[i] == newLine {
+				return i + 1
+			}
+		}
+		return 0
+	},
+	// Priority 4: Prefix match at expected position
+	func(b *IncrementalDiffBuilder, newLine string, expectedPos, _, _ int) int {
+		if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] {
+			trimmed := strings.TrimRight(b.OldLines[expectedPos], " \t")
+			if len(trimmed) > 0 && strings.HasPrefix(newLine, trimmed) {
+				return expectedPos + 1
+			}
+		}
+		return 0
+	},
+	// Priority 5: Similarity match at expected position with priority
+	func(b *IncrementalDiffBuilder, newLine string, expectedPos, _, _ int) int {
+		if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] {
+			if LineSimilarity(newLine, b.OldLines[expectedPos]) > ExpectedPositionSimilarityThreshold {
+				return expectedPos + 1
+			}
+		}
+		return 0
+	},
+	// Priority 6: Prefix match anywhere in window
+	func(b *IncrementalDiffBuilder, newLine string, expectedPos, searchStart, searchEnd int) int {
+		for i := searchStart; i < searchEnd; i++ {
+			if b.usedOldLines[i+1] || i == expectedPos {
+				continue
+			}
+			trimmed := strings.TrimRight(b.OldLines[i], " \t")
+			if len(trimmed) > 0 && strings.HasPrefix(newLine, trimmed) {
+				return i + 1
+			}
+		}
+		return 0
+	},
+	// Priority 7: Best similarity match in window
+	func(b *IncrementalDiffBuilder, newLine string, expectedPos, searchStart, searchEnd int) int {
+		bestIdx := -1
+		bestSim := SimilarityThreshold
+		for i := searchStart; i < searchEnd; i++ {
+			if b.usedOldLines[i+1] || i == expectedPos {
+				continue
+			}
+			sim := LineSimilarity(newLine, b.OldLines[i])
+			if sim > bestSim {
+				bestSim = sim
+				bestIdx = i
+			}
+		}
+		if bestIdx >= 0 {
+			return bestIdx + 1
+		}
+		return 0
+	},
+}
+
 // findMatchingOldLine searches for the best matching old line for the given new line.
 // Returns the 1-indexed old line number, or 0 if no match found.
-//
-// The matching priority is:
-// 1. Exact match at expected position (fastest path for unchanged lines)
-// 2. Empty/whitespace old line with content new line (append_chars scenario)
-// 3. Exact match anywhere in search window (handles model reordering)
-// 4. Prefix match at expected position (completion/append_chars)
-// 5. Similarity match at expected position with priority (fixes mismatch bug)
-// 6. Prefix match anywhere in window
-// 7. Best similarity match in window
 func (b *IncrementalDiffBuilder) findMatchingOldLine(newLine string, _ int) int {
 	if len(b.OldLines) == 0 {
 		return 0
@@ -116,84 +191,12 @@ func (b *IncrementalDiffBuilder) findMatchingOldLine(newLine string, _ int) int 
 	searchStart := max(0, expectedPos-2)
 	searchEnd := min(len(b.OldLines), expectedPos+10)
 
-	// Priority 1: Exact match at expected position
-	if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] {
-		if b.OldLines[expectedPos] == newLine {
-			return expectedPos + 1 // 1-indexed
-		}
-
-		// Priority 2: Empty/whitespace old line at expected position with content new line.
-		// This is a modification (append_chars), not an addition.
-		oldLineTrimmed := strings.TrimSpace(b.OldLines[expectedPos])
-		newLineTrimmed := strings.TrimSpace(newLine)
-		if oldLineTrimmed == "" && newLineTrimmed != "" {
-			return expectedPos + 1 // 1-indexed
+	for _, strategy := range matchStrategies {
+		if result := strategy(b, newLine, expectedPos, searchStart, searchEnd); result > 0 {
+			return result
 		}
 	}
 
-	// Priority 3: Exact match anywhere in search window
-	for i := searchStart; i < searchEnd; i++ {
-		if b.usedOldLines[i+1] {
-			continue
-		}
-		if b.OldLines[i] == newLine {
-			return i + 1
-		}
-	}
-
-	// Priority 4: Prefix match at expected position
-	if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] {
-		oldLineTrimmedRight := strings.TrimRight(b.OldLines[expectedPos], " \t")
-		if len(oldLineTrimmedRight) > 0 && strings.HasPrefix(newLine, oldLineTrimmedRight) {
-			return expectedPos + 1 // 1-indexed
-		}
-	}
-
-	// Priority 5: Similarity match at expected position with priority.
-	// This gives priority to the expected position when similarity is REASONABLY HIGH,
-	// even if a line further away might have slightly higher similarity.
-	// Uses ExpectedPositionSimilarityThreshold to avoid false matches on barely-similar lines.
-	// This fixes the bug where extended if conditions were matched to template strings.
-	if expectedPos < len(b.OldLines) && !b.usedOldLines[expectedPos+1] {
-		expectedSimilarity := LineSimilarity(newLine, b.OldLines[expectedPos])
-		if expectedSimilarity > ExpectedPositionSimilarityThreshold {
-			return expectedPos + 1 // 1-indexed
-		}
-	}
-
-	// Priority 6: Prefix match anywhere in window
-	for i := searchStart; i < searchEnd; i++ {
-		if b.usedOldLines[i+1] || i == expectedPos {
-			continue
-		}
-		oldLineTrimmed := strings.TrimRight(b.OldLines[i], " \t")
-		if len(oldLineTrimmed) > 0 && strings.HasPrefix(newLine, oldLineTrimmed) {
-			return i + 1
-		}
-	}
-
-	// Priority 7: Best similarity match in window (excluding expected position)
-	bestIdx := -1
-	bestSimilarity := SimilarityThreshold
-
-	for i := searchStart; i < searchEnd; i++ {
-		if b.usedOldLines[i+1] || i == expectedPos {
-			continue
-		}
-		similarity := LineSimilarity(newLine, b.OldLines[i])
-		if similarity > bestSimilarity {
-			bestSimilarity = similarity
-			bestIdx = i
-		}
-	}
-
-	if bestIdx >= 0 {
-		return bestIdx + 1
-	}
-
-	// No match found - this will be treated as an addition during streaming.
-	// The actual change type will be determined at stage finalization using
-	// batch diff, which correctly handles equal line counts as modifications.
 	return 0
 }
 
@@ -352,15 +355,15 @@ func (b *IncrementalStageBuilder) extendCurrentStage(lineNum int, bufferLine int
 	b.currentStage.BufferStart, b.currentStage.BufferEnd = b.computeStageBufferRange(b.currentStage)
 }
 
-// finalizeCurrentStage finalizes and returns the current stage
-func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
-	if b.currentStage == nil || len(b.currentStage.rawChanges) == 0 {
-		return nil
-	}
+// oldLineRange holds the computed old line range and extracted content for a stage.
+type oldLineRange struct {
+	minOld        int
+	maxOld        int
+	stageOldLines []string
+}
 
-	stage := b.currentStage
-
-	// Extract NEW content for the stage
+// extractStageNewLines extracts new content lines for the stage from the builder's NewLines.
+func (b *IncrementalStageBuilder) extractStageNewLines(stage *Stage) ([]string, int, int) {
 	newStartLine, newEndLine := getStageNewLineRange(stage)
 	var stageNewLines []string
 	for j := newStartLine; j <= newEndLine && j-1 < len(b.diffBuilder.NewLines); j++ {
@@ -368,15 +371,17 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 			stageNewLines = append(stageNewLines, b.diffBuilder.NewLines[j-1])
 		}
 	}
+	return stageNewLines, newStartLine, newEndLine
+}
 
-	// Find OLD line range using rawChanges and LineMapping.
-	// For changes with explicit OldLineNum (including additions anchored to a line), use that.
-	// For unmatched lines, fall back to the LineMapping or sequential position.
+// computeOldLineRange finds the old line range using rawChanges and LineMapping,
+// then extracts old content for that range.
+func (b *IncrementalStageBuilder) computeOldLineRange(stage *Stage, newStartLine, newEndLine int) oldLineRange {
 	minOld := -1
 	maxOld := -1
 
-	// First, check rawChanges for explicit old line anchors
-	for lineNum, change := range stage.rawChanges {
+	// Check rawChanges for explicit old line anchors
+	for _, change := range stage.rawChanges {
 		if change.OldLineNum > 0 && change.OldLineNum <= len(b.OldLines) {
 			if minOld == -1 || change.OldLineNum < minOld {
 				minOld = change.OldLineNum
@@ -386,7 +391,6 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 			}
 		} else if change.Type == ChangeAddition && change.OldLineNum == -1 {
 			// Pure addition without anchor - use the last old line as anchor
-			// This handles additions that extend beyond the original content
 			lastOldLine := len(b.OldLines)
 			if lastOldLine > 0 {
 				if minOld == -1 || lastOldLine < minOld {
@@ -397,10 +401,9 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 				}
 			}
 		}
-		_ = lineNum // suppress unused warning
 	}
 
-	// Fall back to LineMapping if no anchors found in rawChanges
+	// Fall back to LineMapping if no anchors found
 	if minOld == -1 {
 		for j := newStartLine; j <= newEndLine; j++ {
 			if j <= 0 {
@@ -411,7 +414,6 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 				oldLine = b.diffBuilder.LineMapping.NewToOld[j-1]
 			}
 			if oldLine <= 0 {
-				// Unmatched line - use sequential position as fallback
 				oldLine = j
 			}
 			if oldLine > 0 && oldLine <= len(b.OldLines) {
@@ -425,32 +427,24 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 		}
 	}
 
-	// Extract OLD content for the computed range
+	// Extract old content for the computed range
 	var stageOldLines []string
 	if minOld > 0 && maxOld > 0 {
-		// Convert 1-indexed old line numbers to 0-indexed array indices
 		startIdx := minOld - 1
-		endIdx := maxOld // exclusive (maxOld is 1-indexed, so maxOld = endIdx exclusive)
+		endIdx := maxOld
 		if startIdx >= 0 && endIdx <= len(b.OldLines) {
 			stageOldLines = b.OldLines[startIdx:endIdx]
 		}
 	}
 
-	// Compute initial BufferStart from the old line range (before additions adjustment)
-	bufferStart := b.BaseLineOffset
-	if minOld > 0 {
-		bufferStart = minOld + b.BaseLineOffset - 1
-	}
+	return oldLineRange{minOld: minOld, maxOld: maxOld, stageOldLines: stageOldLines}
+}
 
-	// Build changes using the LineMapping from streaming for line correspondence,
-	// then categorize each pair individually. This preserves the ordered prefix
-	// matching from incremental diff while getting accurate change types.
-	//
-	// The key insight: batch ComputeDiff optimizes globally and may match lines
-	// out of order, but for code completion we want ordered matching where the
-	// first new line matches the first old line (especially for prefix completion).
-
-	// First, build a set of old lines that are already matched (to avoid double-use)
+// remapChanges builds changes using the LineMapping from streaming for line correspondence,
+// categorizing each pair individually. This preserves ordered prefix matching from
+// incremental diff while getting accurate change types.
+func (b *IncrementalStageBuilder) remapChanges(stageNewLines []string, newStartLine, newEndLine, minOld int) map[int]LineChange {
+	// Build a set of old lines that are already matched (to avoid double-use)
 	usedOldLines := make(map[int]bool)
 	for j := newStartLine; j <= newEndLine; j++ {
 		if j > 0 && j-1 < len(b.diffBuilder.LineMapping.NewToOld) {
@@ -463,18 +457,15 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 
 	remappedChanges := make(map[int]LineChange)
 	for i, newLine := range stageNewLines {
-		relativeLine := i + 1 // 1-indexed relative to stage
+		relativeLine := i + 1
 		absoluteNewLine := newStartLine + i
 
-		// Get the matched old line from streaming's LineMapping
 		var oldLine int
 		var oldContent string
 		if absoluteNewLine > 0 && absoluteNewLine-1 < len(b.diffBuilder.LineMapping.NewToOld) {
 			oldLine = b.diffBuilder.LineMapping.NewToOld[absoluteNewLine-1]
 		}
 		if oldLine <= 0 {
-			// No match during streaming - use sequential position as fallback
-			// BUT only if that old line isn't already matched to another new line
 			fallbackOldLine := absoluteNewLine
 			if fallbackOldLine > 0 && fallbackOldLine <= len(b.OldLines) && !usedOldLines[fallbackOldLine] {
 				oldLine = fallbackOldLine
@@ -484,10 +475,8 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 			oldContent = b.OldLines[oldLine-1]
 		}
 
-		// Determine change type
 		var change LineChange
 		if oldLine <= 0 {
-			// No matching old line - this is an addition
 			change = LineChange{
 				Type:       ChangeAddition,
 				OldLineNum: -1,
@@ -495,14 +484,12 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 				Content:    newLine,
 			}
 		} else if oldContent == newLine {
-			// Skip if content is identical (matched old line with same content)
 			continue
 		} else {
-			// Modification - categorize the change type
 			changeType, colStart, colEnd := categorizeLineChangeWithColumns(oldContent, newLine)
 			change = LineChange{
 				Type:       changeType,
-				OldLineNum: oldLine - minOld + 1, // Relative to stage's old content
+				OldLineNum: oldLine - minOld + 1,
 				NewLineNum: relativeLine,
 				OldContent: oldContent,
 				Content:    newLine,
@@ -513,10 +500,30 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 		remappedChanges[relativeLine] = change
 	}
 
-	// Check if this is a pure additions stage using the REMAPPED changes.
-	// This is important because streaming may classify low-similarity modifications
-	// as additions, but the fallback matching above correctly identifies them as
-	// modifications. We use the final classification to decide on buffer positioning.
+	return remappedChanges
+}
+
+// finalizeCurrentStage finalizes and returns the current stage
+func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
+	if b.currentStage == nil || len(b.currentStage.rawChanges) == 0 {
+		return nil
+	}
+
+	stage := b.currentStage
+
+	stageNewLines, newStartLine, newEndLine := b.extractStageNewLines(stage)
+	olr := b.computeOldLineRange(stage, newStartLine, newEndLine)
+
+	bufferStart := b.BaseLineOffset
+	if olr.minOld > 0 {
+		bufferStart = olr.minOld + b.BaseLineOffset - 1
+	}
+
+	remappedChanges := b.remapChanges(stageNewLines, newStartLine, newEndLine, olr.minOld)
+
+	// Check if this is a pure additions stage using the remapped changes.
+	// Streaming may classify low-similarity modifications as additions, but
+	// fallback matching correctly identifies them as modifications.
 	hasPureAdditionsOnly := true
 	for _, change := range remappedChanges {
 		if change.Type != ChangeAddition {
@@ -525,19 +532,16 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 		}
 	}
 
-	// For pure additions WITH a valid anchor, the buffer range represents
-	// where the new content will be INSERTED, not the anchor. Additions are inserted
-	// AFTER the anchor line, so we need to add 1 to get the insertion point.
-	// This matches the non-streaming getStageBufferRange behavior.
-	if hasPureAdditionsOnly && minOld > 0 {
+	// For pure additions WITH a valid anchor, additions are inserted
+	// AFTER the anchor line, so add 1 to get the insertion point.
+	if hasPureAdditionsOnly && olr.minOld > 0 {
 		bufferStart++
 	}
 
 	stage.BufferStart = bufferStart
-	stage.BufferEnd = max(bufferStart+len(stageOldLines)-1, bufferStart)
+	stage.BufferEnd = max(bufferStart+len(olr.stageOldLines)-1, bufferStart)
 
 	// Build mapping from relative line to buffer line for modifications.
-	// Modifications map to their old line position in the buffer.
 	relativeToBufferLine := make(map[int]int)
 	for relativeLine, change := range remappedChanges {
 		if change.Type == ChangeModification || change.Type.IsCharacterLevel() {
@@ -547,7 +551,6 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 		}
 	}
 
-	// Compute groups, set BufferLine, validate render hints, and compute cursor position
 	ctx := &StageContext{
 		BufferStart:         bufferStart,
 		CursorRow:           b.CursorRow,
@@ -556,7 +559,6 @@ func (b *IncrementalStageBuilder) finalizeCurrentStage() *Stage {
 	}
 	groups, cursorLine, cursorCol := FinalizeStageGroups(remappedChanges, stageNewLines, ctx)
 
-	// Populate stage fields
 	stage.Lines = stageNewLines
 	stage.Changes = remappedChanges
 	stage.Groups = groups
@@ -612,15 +614,14 @@ func (b *IncrementalStageBuilder) Finalize() *StagingResult {
 
 	// Sort stages by cursor distance
 	stages := b.finalizedStages
-	for i := 0; i < len(stages)-1; i++ {
-		for j := i + 1; j < len(stages); j++ {
-			distI := stageDistanceFromCursor(stages[i], b.CursorRow)
-			distJ := stageDistanceFromCursor(stages[j], b.CursorRow)
-			if distJ < distI || (distJ == distI && stages[j].startLine < stages[i].startLine) {
-				stages[i], stages[j] = stages[j], stages[i]
-			}
+	sort.SliceStable(stages, func(i, j int) bool {
+		distI := stageDistanceFromCursor(stages[i], b.CursorRow)
+		distJ := stageDistanceFromCursor(stages[j], b.CursorRow)
+		if distI != distJ {
+			return distI < distJ
 		}
-	}
+		return stages[i].startLine < stages[j].startLine
+	})
 
 	// Set cursor targets and IsLastStage
 	for i, stage := range stages {
@@ -660,4 +661,3 @@ func (b *IncrementalStageBuilder) Finalize() *StagingResult {
 		FirstNeedsNavigation: firstNeedsNav,
 	}
 }
-

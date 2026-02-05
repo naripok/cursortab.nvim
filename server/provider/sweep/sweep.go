@@ -18,7 +18,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),
 		},
-		DiffBuilder: provider.FormatDiffHistoryOriginalUpdated("<|file_sep|>%s.diff\n"),
+		DiffBuilder:   provider.FormatDiffHistoryOriginalUpdated("<|file_sep|>%s.diff\n"),
 		PromptBuilder: buildPrompt,
 		Postprocessors: []provider.Postprocessor{
 			provider.RejectEmpty(),

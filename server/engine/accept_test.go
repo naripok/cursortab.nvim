@@ -32,7 +32,7 @@ func TestClearState_Options(t *testing.T) {
 	eng := createTestEngine(buf, prov, clock)
 
 	eng.completions = []*types.Completion{{StartLine: 1, EndLineInc: 1, Lines: []string{"test"}}}
-	eng.stagedCompletion = &types.StagedCompletion{CurrentIdx: 0}
+	eng.stagedCompletion = &text.StagedCompletion{CurrentIdx: 0}
 	eng.cursorTarget = &types.CursorPredictionTarget{LineNumber: 5}
 
 	eng.clearState(ClearOptions{
@@ -361,8 +361,8 @@ func TestPartialAccept_StagedCompletion_UsesCurrentGroups(t *testing.T) {
 	eng := createTestEngine(buf, prov, clock)
 
 	// Staged completion exists with OLD groups (before rerenderPartial updated them)
-	eng.stagedCompletion = &types.StagedCompletion{
-		Stages: []any{
+	eng.stagedCompletion = &text.StagedCompletion{
+		Stages: []*text.Stage{
 			&text.Stage{
 				BufferStart: 3,
 				BufferEnd:   3,
@@ -641,8 +641,8 @@ func TestPartialAccept_MultiLineCompletion_CursorTargetConsistency(t *testing.T)
 		}}
 		eng.completionOriginalLines = []string{"a", "b"}
 		eng.currentGroups = []*text.Group{{Type: "modification", BufferLine: 1}}
-		eng.stagedCompletion = &types.StagedCompletion{
-			Stages:     []any{stage1, stage2},
+		eng.stagedCompletion = &text.StagedCompletion{
+			Stages:     []*text.Stage{stage1, stage2},
 			CurrentIdx: 0,
 		}
 		eng.applyBatch = &mockBatch{}

@@ -20,9 +20,9 @@ import (
 
 func TestFormatRecentChanges(t *testing.T) {
 	tests := []struct {
-		name      string
-		histories []*types.FileDiffHistory
-		wantEmpty bool
+		name         string
+		histories    []*types.FileDiffHistory
+		wantEmpty    bool
 		wantContains string
 	}{
 		{
@@ -131,8 +131,8 @@ func TestProviderGetCompletion(t *testing.T) {
 
 		// Return a simple completion
 		resp := sweepapi.AutocompleteResponse{
-			StartIndex: 6,                   // Start of "world"
-			EndIndex:   11,                  // End of "world"
+			StartIndex: 6,                  // Start of "world"
+			EndIndex:   11,                 // End of "world"
 			Completion: "universe is vast", // Replace "world" with longer text
 		}
 		json.NewEncoder(w).Encode(resp)

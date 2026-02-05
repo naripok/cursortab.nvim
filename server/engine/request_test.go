@@ -97,9 +97,9 @@ func TestAcceptLastStage_UsesPrefetchForCursorPrediction(t *testing.T) {
 	}}
 	eng.applyBatch = &mockBatch{}
 
-	eng.stagedCompletion = &types.StagedCompletion{
+	eng.stagedCompletion = &text.StagedCompletion{
 		CurrentIdx: 1,
-		Stages: []any{
+		Stages: []*text.Stage{
 			&text.Stage{
 				BufferStart: 10,
 				BufferEnd:   10,
@@ -171,9 +171,9 @@ func TestAcceptLastStage_ClearsStalePrefetch_WhenOverlaps(t *testing.T) {
 	}}
 	eng.applyBatch = &mockBatch{}
 
-	eng.stagedCompletion = &types.StagedCompletion{
+	eng.stagedCompletion = &text.StagedCompletion{
 		CurrentIdx: 1,
-		Stages: []any{
+		Stages: []*text.Stage{
 			&text.Stage{
 				BufferStart: 10,
 				BufferEnd:   10,
@@ -289,9 +289,9 @@ func TestPartialAccept_FinishTriggersPrefetch_N1Stage(t *testing.T) {
 		ShouldRetrigger: false,
 	}
 
-	eng.stagedCompletion = &types.StagedCompletion{
+	eng.stagedCompletion = &text.StagedCompletion{
 		CurrentIdx: 0,
-		Stages: []any{
+		Stages: []*text.Stage{
 			&text.Stage{
 				BufferStart: 1,
 				BufferEnd:   1,
@@ -471,9 +471,9 @@ func TestAcceptLastStage_UsesPrefetchWithAdditionalChanges(t *testing.T) {
 	defer cancel()
 
 	// Setup staged completion at last stage (line 3)
-	eng.stagedCompletion = &types.StagedCompletion{
+	eng.stagedCompletion = &text.StagedCompletion{
 		CurrentIdx: 0,
-		Stages: []any{
+		Stages: []*text.Stage{
 			&text.Stage{
 				BufferStart: 3,
 				BufferEnd:   3,
@@ -543,9 +543,9 @@ func TestAcceptLastStage_WaitsForInflightPrefetch(t *testing.T) {
 	defer cancel()
 
 	// Setup staged completion at last stage
-	eng.stagedCompletion = &types.StagedCompletion{
+	eng.stagedCompletion = &text.StagedCompletion{
 		CurrentIdx: 0,
-		Stages: []any{
+		Stages: []*text.Stage{
 			&text.Stage{
 				BufferStart: 2,
 				BufferEnd:   2,

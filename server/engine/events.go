@@ -448,60 +448,39 @@ func (e *Engine) doRejectStreaming(event Event) {
 	e.stopIdleTimer()
 }
 
+// cancelStreamAndCheckTyping cancels the given streaming mode, preserving partial state,
+// then checks if user typing matches the prediction.
+// Returns true if the event was handled (match or mismatch), false if no partial results.
+func (e *Engine) cancelStreamAndCheckTyping(cancelFn func()) bool {
+	cancelFn()
+	e.syncBuffer()
+	matches, hasRemaining := e.checkTypingMatchesPrediction()
+	if matches {
+		if hasRemaining {
+			e.state = stateHasCompletion
+			return true
+		}
+		e.clearAll()
+		e.state = stateIdle
+		e.startTextChangeTimer()
+		return true
+	}
+	e.reject()
+	e.startTextChangeTimer()
+	return true
+}
+
 func (e *Engine) doRejectStreamingAndDebounce(event Event) {
-	// For token streaming with partial results, check if typing matches
 	if e.tokenStreamingState != nil && len(e.completions) > 0 {
-		// Cancel the stream but preserve the partial completion state
-		e.cancelTokenStreamingKeepPartial()
-
-		// Check if the typed text matches the partial completion
-		e.syncBuffer()
-		matches, hasRemaining := e.checkTypingMatchesPrediction()
-		if matches {
-			if hasRemaining {
-				// Typing matches - keep completion state
-				e.state = stateHasCompletion
-				return
-			}
-			// User typed everything
-			e.clearAll()
-			e.state = stateIdle
-			e.startTextChangeTimer()
-			return
-		}
-		// Doesn't match - reject
-		e.reject()
-		e.startTextChangeTimer()
+		e.cancelStreamAndCheckTyping(e.cancelTokenStreamingKeepPartial)
 		return
 	}
 
-	// For line streaming with partial results (first stage rendered), check if typing matches
 	if e.streamingState != nil && len(e.completions) > 0 {
-		// Cancel the stream but preserve the partial completion state
-		e.cancelLineStreamingKeepPartial()
-
-		// Check if the typed text matches the partial completion
-		e.syncBuffer()
-		matches, hasRemaining := e.checkTypingMatchesPrediction()
-		if matches {
-			if hasRemaining {
-				// Typing matches - keep completion state
-				e.state = stateHasCompletion
-				return
-			}
-			// User typed everything
-			e.clearAll()
-			e.state = stateIdle
-			e.startTextChangeTimer()
-			return
-		}
-		// Doesn't match - reject
-		e.reject()
-		e.startTextChangeTimer()
+		e.cancelStreamAndCheckTyping(e.cancelLineStreamingKeepPartial)
 		return
 	}
 
-	// No partial results - reject everything
 	e.cancelStreaming()
 	e.reject()
 	e.startTextChangeTimer()

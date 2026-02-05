@@ -41,30 +41,30 @@ type NvimBuffer struct {
 	config Config
 
 	// Pending completion state (committed only on accept)
-	pendingStartLine        int
-	pendingEndLineInclusive int
-	pendingLines            []string
-	hasPending              bool
+	pending *PendingEdit
+}
+
+// PendingEdit holds pending completion state committed only on accept
+type PendingEdit struct {
+	StartLine        int
+	EndLineInclusive int
+	Lines            []string
 }
 
 func New(config Config) *NvimBuffer {
 	return &NvimBuffer{
-		lines:                   []string{},
-		row:                     1,
-		col:                     0,
-		path:                    "",
-		version:                 0,
-		diffHistories:           []*types.DiffEntry{},
-		previousLines:           []string{},
-		originalLines:           []string{},
-		lastModifiedLine:        -1,
-		id:                      nvim.Buffer(0),
-		scrollOffsetX:           0,
-		config:                  config,
-		pendingStartLine:        0,
-		pendingEndLineInclusive: 0,
-		pendingLines:            nil,
-		hasPending:              false,
+		lines:            []string{},
+		row:              1,
+		col:              0,
+		path:             "",
+		version:          0,
+		diffHistories:    []*types.DiffEntry{},
+		previousLines:    []string{},
+		originalLines:    []string{},
+		lastModifiedLine: -1,
+		id:               nvim.Buffer(0),
+		scrollOffsetX:    0,
+		config:           config,
 	}
 }
 
@@ -308,13 +308,13 @@ func (b *NvimBuffer) PrepareCompletion(startLine, endLineInc int, lines []string
 // CommitPending applies the pending edit to buffer state, increments version,
 // and appends structured diff entries showing before/after content. No-op if no pending edit.
 func (b *NvimBuffer) CommitPending() {
-	if !b.hasPending {
+	if b.pending == nil {
 		return
 	}
 
-	startLine := b.pendingStartLine
-	endLineInclusive := b.pendingEndLineInclusive
-	lines := b.pendingLines
+	startLine := b.pending.StartLine
+	endLineInclusive := b.pending.EndLineInclusive
+	lines := b.pending.Lines
 
 	// Extract only the affected original lines (the range being replaced)
 	var originalRangeLines []string
@@ -349,11 +349,7 @@ func (b *NvimBuffer) CommitPending() {
 	copy(b.lines, newLines)
 	b.version++
 
-	// Clear pending
-	b.pendingStartLine = 0
-	b.pendingEndLineInclusive = 0
-	b.pendingLines = nil
-	b.hasPending = false
+	b.pending = nil
 }
 
 // CommitUserEdits extracts diffs between originalLines checkpoint and current lines,
@@ -414,8 +410,7 @@ func (b *NvimBuffer) ClearUI() error {
 	}
 
 	// Clear pending state to prevent stale data from being committed
-	b.hasPending = false
-	b.pendingLines = nil
+	b.pending = nil
 
 	logger.Debug("sending to lua on_reject")
 	b.executeLuaFunction("require('cursortab').on_reject()")
@@ -700,10 +695,11 @@ func (b *NvimBuffer) getApplyBatch(startLine, endLineInclusive int, lines []stri
 	}
 
 	// Mark as pending; actual commit happens on accept
-	b.pendingStartLine = startLine
-	b.pendingEndLineInclusive = endLineInclusive
-	b.pendingLines = append([]string{}, lines...)
-	b.hasPending = true
+	b.pending = &PendingEdit{
+		StartLine:        startLine,
+		EndLineInclusive: endLineInclusive,
+		Lines:            append([]string{}, lines...),
+	}
 
 	return applyBatch
 }
