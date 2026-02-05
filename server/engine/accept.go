@@ -58,12 +58,32 @@ func (e *Engine) acceptCompletion() {
 	// 2. Clear completion state (keep prefetch)
 	e.clearCompletionState()
 
-	// 3. Advance staged completion if any
+	// 3. Check if this is the last stage and prefetch extends beyond it
+	// Must try BEFORE advanceStagedCompletion which may clear the prefetch
+	isLastStage := e.stagedCompletion != nil &&
+		e.stagedCompletion.CurrentIdx == len(e.stagedCompletion.Stages)-1
+	if isLastStage && e.cursorTarget != nil && e.cursorTarget.ShouldRetrigger {
+		if e.prefetchState == prefetchReady && len(e.prefetchedCompletions) > 0 {
+			currentStage := e.getStage(e.stagedCompletion.CurrentIdx)
+			prefetch := e.prefetchedCompletions[0]
+			prefetchResultEnd := prefetch.StartLine + len(prefetch.Lines) - 1
+
+			// Only use prefetch if it has content beyond the stage just applied
+			if currentStage != nil && prefetchResultEnd > currentStage.BufferEnd {
+				e.syncBuffer()
+				if e.tryShowPrefetchedCompletion() {
+					return
+				}
+			}
+		}
+	}
+
+	// 4. Advance staged completion if any
 	if e.stagedCompletion != nil {
 		e.advanceStagedCompletion()
 	}
 
-	// 4. Determine next state
+	// 5. Determine next state
 	if e.hasMoreStages() {
 		e.syncBuffer()
 		e.prefetchAtNMinusOne()
@@ -71,14 +91,21 @@ func (e *Engine) acceptCompletion() {
 		return
 	}
 
-	// 5. No more stages - handle cursor target
+	// 6. No more stages - handle cursor target
 	e.syncBuffer()
 	if e.cursorTarget != nil && e.cursorTarget.ShouldRetrigger {
-		// If prefetch is ready, use it to show next completion/cursor prediction
+		// If prefetch is ready, use it
 		if e.prefetchState == prefetchReady && len(e.prefetchedCompletions) > 0 {
 			if e.tryShowPrefetchedCompletion() {
 				return
 			}
+		}
+		// If prefetch is in-flight, wait for it instead of triggering a new request
+		if e.prefetchState == prefetchInFlight || e.prefetchState == prefetchWaitingForCursorPrediction {
+			e.prefetchState = prefetchWaitingForTab
+			e.buffer.ClearUI()
+			e.state = stateIdle
+			return
 		}
 		e.prefetchAtCursorTarget()
 	}
