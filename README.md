@@ -160,14 +160,16 @@ Zeta, and Copilot.
 
 **Context Per Provider:**
 
-| Context              | inline | fim | sweep | zeta | sweepapi | copilot |
-| -------------------- | :----: | :-: | :---: | :--: | :------: | :-----: |
-| Buffer content       |   ✓    |  ✓  |   ✓   |  ✓   |    ✓     |    ✓    |
-| Edit history         |        |     |   ✓   |  ✓   |    ✓     |         |
-| Previous file state  |        |     |   ✓   |      |          |         |
-| LSP diagnostics      |        |     |       |  ✓   |    ✓     |         |
-| Recent files         |        |     |       |      |    ✓     |         |
-| User actions         |        |     |       |      |    ✓     |         |
+| Context             | inline | fim | sweep | zeta | sweepapi | copilot |
+| ------------------- | :----: | :-: | :---: | :--: | :------: | :-----: |
+| Buffer content      |   ✓    |  ✓  |   ✓   |  ✓   |    ✓     |         |
+| Edit history        |        |     |   ✓   |  ✓   |    ✓     |         |
+| Previous file state |        |     |   ✓   |      |    ✓     |         |
+| LSP diagnostics     |        |     |       |  ✓   |    ✓     |         |
+| Treesitter context  |        |     |   ✓   |  ✓   |    ✓     |         |
+| Git diff context    |        |     |   ✓   |  ✓   |    ✓     |         |
+| Recent files        |        |     |       |      |    ✓     |         |
+| User actions        |        |     |       |      |    ✓     |         |
 
 #### Inline Provider (Default)
 
