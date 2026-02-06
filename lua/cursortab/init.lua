@@ -95,46 +95,9 @@ function M.clear_log()
 	vim.notify("Cursortab log cleared", vim.log.levels.INFO)
 end
 
----Show cursortab status information in a floating window
+---Show cursortab status via checkhealth
 function M.status()
-	local daemon_status = daemon.check_daemon_status()
-	local channel_status = daemon.get_channel_status()
-	local plugin_enabled = daemon.is_enabled()
-
-	-- Build status message
-	local status_lines = {
-		"  _____                      __       __ ",
-		" / ___/_ _________ ___  ____/ /____ _/ / ",
-		"/ /__/ // / __(_-</ _ \\/ __/ __/ _ `/ _ \\",
-		"\\___/\\_,_/_/ /___/\\___/_/  \\__/\\_,_/_.__/",
-		"",
-		"Plugin State:",
-		"  • Enabled: " .. (plugin_enabled and "✓ Yes" or "✗ No"),
-		"",
-		"Daemon Status:",
-		"  • Socket exists: " .. (daemon_status.socket_exists and "✓ Yes" or "✗ No"),
-		"  • PID file exists: " .. (daemon_status.pid_file_exists and "✓ Yes" or "✗ No"),
-		"  • Process running: " .. (daemon_status.daemon_running and "✓ Yes" or "✗ No"),
-	}
-
-	if daemon_status.pid then
-		table.insert(status_lines, "  • Process ID: " .. daemon_status.pid)
-	end
-
-	table.insert(status_lines, "")
-	table.insert(status_lines, "Client Connection:")
-	table.insert(status_lines, "  • Connected: " .. (channel_status.connected and "✓ Yes" or "✗ No"))
-
-	if channel_status.channel_id then
-		table.insert(status_lines, "  • Channel ID: " .. channel_status.channel_id)
-	end
-
-	-- Create scratch window using UI module
-	ui.create_scratch_window("Cursortab Status", status_lines, {
-		size_mode = "fit_content",
-	})
-
-	vim.notify("Cursortab status displayed", vim.log.levels.INFO)
+	vim.cmd("checkhealth cursortab")
 end
 
 ---Restart cursortab daemon

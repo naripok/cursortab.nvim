@@ -1,0 +1,71 @@
+local config = require("cursortab.config")
+local daemon = require("cursortab.daemon")
+
+local M = {}
+
+function M.check()
+	local cfg = config.get()
+	local daemon_status = daemon.check_daemon_status()
+	local channel_status = daemon.get_channel_status()
+
+	-- Daemon
+	vim.health.start("Daemon")
+	if not daemon.is_enabled() then
+		vim.health.warn("Plugin is disabled")
+	elseif daemon_status.daemon_running and channel_status.connected then
+		vim.health.ok("Running (pid: " .. daemon_status.pid .. ", channel: " .. channel_status.channel_id .. ")")
+	elseif daemon_status.daemon_running then
+		vim.health.warn("Process running (pid: " .. daemon_status.pid .. ") but not connected")
+	else
+		vim.health.error("Not running", { "Run :CursortabRestart to start the daemon" })
+	end
+
+	-- Provider
+	vim.health.start("Provider")
+	vim.health.info("type: " .. cfg.provider.type)
+	vim.health.info("model: " .. (cfg.provider.model ~= "" and cfg.provider.model or "-"))
+	vim.health.info("url: " .. cfg.provider.url)
+	vim.health.info("api_key_env: " .. (cfg.provider.api_key_env ~= "" and cfg.provider.api_key_env or "-"))
+	vim.health.info("timeout: " .. cfg.provider.completion_timeout .. "ms")
+	vim.health.info("max_tokens: " .. cfg.provider.max_tokens)
+	vim.health.info("privacy_mode: " .. (cfg.provider.privacy_mode and "yes" or "no"))
+
+	if cfg.provider.api_key_env ~= "" then
+		local key = vim.fn.getenv(cfg.provider.api_key_env)
+		if key == vim.NIL or key == "" then
+			vim.health.error(cfg.provider.api_key_env .. " is not set", {
+				"Export " .. cfg.provider.api_key_env .. " in your shell config",
+				"Run :CursortabRestart after setting it",
+			})
+		else
+			vim.health.ok(cfg.provider.api_key_env .. " is set")
+		end
+	end
+
+	-- Behavior
+	vim.health.start("Behavior")
+	vim.health.info("idle_delay: " .. cfg.behavior.idle_completion_delay .. "ms")
+	vim.health.info("debounce: " .. cfg.behavior.text_change_debounce .. "ms")
+	vim.health.info("max_visible_lines: " .. cfg.behavior.max_visible_lines)
+	vim.health.info("cursor_prediction: " .. (cfg.behavior.cursor_prediction.enabled and "yes" or "no"))
+	vim.health.info("auto_advance: " .. (cfg.behavior.cursor_prediction.auto_advance and "yes" or "no"))
+	vim.health.info("proximity_threshold: " .. cfg.behavior.cursor_prediction.proximity_threshold)
+
+	-- Keymaps
+	vim.health.start("Keymaps")
+	vim.health.info("accept: " .. (cfg.keymaps.accept or "disabled"))
+	vim.health.info("partial_accept: " .. (cfg.keymaps.partial_accept or "disabled"))
+	vim.health.info("trigger: " .. (cfg.keymaps.trigger or "disabled"))
+
+	-- Blink
+	vim.health.start("Blink")
+	vim.health.info("enabled: " .. (cfg.blink.enabled and "yes" or "no"))
+	vim.health.info("ghost_text: " .. (cfg.blink.ghost_text and "yes" or "no"))
+
+	-- Paths
+	vim.health.start("Paths")
+	vim.health.info("state_dir: " .. cfg.state_dir)
+	vim.health.info("log_level: " .. cfg.log_level)
+end
+
+return M
