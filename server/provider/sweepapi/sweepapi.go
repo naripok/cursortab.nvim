@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"cursortab/client/sweepapi"
 	"cursortab/logger"
+	"cursortab/metrics"
 	"cursortab/types"
 )
 
@@ -198,27 +198,10 @@ func truncateDiffHistories(histories []*types.FileDiffHistory) []*types.FileDiff
 	return result
 }
 
-// metricsEvent represents a metrics tracking event to be sent to the API.
-type metricsEvent struct {
-	eventType    sweepapi.EventType
-	completionID string
-	additions    int
-	deletions    int
-}
-
 // Provider implements the Sweep hosted API provider
 type Provider struct {
 	config *types.ProviderConfig
 	client *sweepapi.Client
-
-	// Acceptance tracking state
-	mu               sync.Mutex
-	lastCompletionID string
-	lastAdditions    int
-	lastDeletions    int
-
-	// Metrics channel for ordered event processing
-	metricsCh chan metricsEvent
 }
 
 // NewProvider creates a new Sweep API provider
@@ -229,13 +212,39 @@ func NewProvider(config *types.ProviderConfig) *Provider {
 		url = config.ProviderURL
 	}
 
-	p := &Provider{
-		config:    config,
-		client:    sweepapi.NewClient(url, config.APIKey, config.CompletionTimeout),
-		metricsCh: make(chan metricsEvent, 64),
+	return &Provider{
+		config: config,
+		client: sweepapi.NewClient(url, config.APIKey, config.CompletionTimeout),
 	}
-	go p.metricsWorker()
-	return p
+}
+
+// SendMetric implements metrics.Sender
+func (p *Provider) SendMetric(ctx context.Context, event metrics.Event) {
+	var sweepEvent sweepapi.EventType
+	switch event.Type {
+	case metrics.EventShown:
+		sweepEvent = sweepapi.EventShown
+	case metrics.EventAccepted:
+		sweepEvent = sweepapi.EventAccepted
+	case metrics.EventRejected, metrics.EventIgnored:
+		// SweepAPI doesn't support rejected/ignored events
+		return
+	default:
+		return
+	}
+
+	req := &sweepapi.MetricsRequest{
+		EventType:          sweepEvent,
+		SuggestionType:     sweepapi.SuggestionGhostText,
+		Additions:          event.Info.Additions,
+		Deletions:          event.Info.Deletions,
+		AutocompleteID:     event.Info.ID,
+		DebugInfo:          "cursortab-nvim",
+		PrivacyModeEnabled: p.config.PrivacyMode,
+	}
+	if err := p.client.TrackMetrics(ctx, req); err != nil {
+		logger.Warn("sweepapi: failed to track %s: %v", event.Type, err)
+	}
 }
 
 // GetCompletion implements engine.Provider
@@ -320,16 +329,8 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	logger.Debug("sweepapi: byte range [%d:%d] -> lines [%d:%d], origEndLine=%d",
 		apiResp.StartIndex, apiResp.EndIndex, startLine, endLine, origEndLine)
 
-	// Store completion info for acceptance tracking
+	// Calculate metrics info for the engine
 	additions, deletions := countChanges(origEndLine-startLine+1, len(newLines))
-	p.mu.Lock()
-	p.lastCompletionID = apiResp.AutocompleteID
-	p.lastAdditions = additions
-	p.lastDeletions = deletions
-	p.mu.Unlock()
-
-	// Send "shown" event to register completion for tracking
-	p.trackMetric(sweepapi.EventShown, apiResp.AutocompleteID, additions, deletions)
 
 	return &types.CompletionResponse{
 		Completions: []*types.Completion{{
@@ -337,54 +338,17 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 			EndLineInc: origEndLine + trimOffset,
 			Lines:      newLines,
 		}},
+		MetricsInfo: &types.MetricsInfo{
+			ID:        apiResp.AutocompleteID,
+			Additions: additions,
+			Deletions: deletions,
+		},
 	}, nil
 }
 
 // countChanges calculates additions and deletions based on line counts.
 func countChanges(oldLineCount, newLineCount int) (additions, deletions int) {
 	return max(newLineCount, 1), max(oldLineCount, 1)
-}
-
-// AcceptCompletion implements engine.CompletionAccepter
-func (p *Provider) AcceptCompletion(ctx context.Context) {
-	p.mu.Lock()
-	completionID := p.lastCompletionID
-	additions := p.lastAdditions
-	deletions := p.lastDeletions
-	p.lastCompletionID = "" // Clear after use
-	p.mu.Unlock()
-
-	p.trackMetric(sweepapi.EventAccepted, completionID, additions, deletions)
-}
-
-// metricsWorker processes metrics events from the channel in order.
-func (p *Provider) metricsWorker() {
-	for ev := range p.metricsCh {
-		req := &sweepapi.MetricsRequest{
-			EventType:          ev.eventType,
-			SuggestionType:     sweepapi.SuggestionGhostText,
-			Additions:          ev.additions,
-			Deletions:          ev.deletions,
-			AutocompleteID:     ev.completionID,
-			DebugInfo:          "cursortab-nvim",
-			PrivacyModeEnabled: p.config.PrivacyMode,
-		}
-		if err := p.client.TrackMetrics(context.Background(), req); err != nil {
-			logger.Warn("sweepapi: failed to track %s: %v", ev.eventType, err)
-		}
-	}
-}
-
-// trackMetric queues a metrics event for processing.
-func (p *Provider) trackMetric(eventType sweepapi.EventType, completionID string, additions, deletions int) {
-	if completionID == "" {
-		return
-	}
-	select {
-	case p.metricsCh <- metricsEvent{eventType, completionID, additions, deletions}:
-	default:
-		logger.Warn("sweepapi: metrics channel full, dropping %s event", eventType)
-	}
 }
 
 // formatRecentChanges converts FileDiffHistories to a string for the API

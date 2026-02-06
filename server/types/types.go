@@ -54,6 +54,14 @@ type CompletionRequest struct {
 type CompletionResponse struct {
 	Completions  []*Completion
 	CursorTarget *CursorPredictionTarget // Optional, from cursor_prediction_target
+	MetricsInfo  *MetricsInfo            // Optional, for providers that track metrics
+}
+
+// MetricsInfo holds metadata for metrics tracking
+type MetricsInfo struct {
+	ID        string // Provider-specific completion ID
+	Additions int    // Number of lines added
+	Deletions int    // Number of lines deleted
 }
 
 // LinterErrors represents linter error information for the current file
@@ -158,4 +166,5 @@ type ProviderConfig struct {
 	FIMTokens           FIMTokenConfig // FIM tokens configuration
 	CompletionTimeout   int            // Timeout for completion requests in milliseconds
 	PrivacyMode         bool           // Don't send telemetry to provider
+	Version             string         // Plugin version for metrics/telemetry
 }

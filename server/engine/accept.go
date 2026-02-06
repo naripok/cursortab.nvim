@@ -2,6 +2,7 @@ package engine
 
 import (
 	"cursortab/logger"
+	"cursortab/metrics"
 	"cursortab/text"
 	"cursortab/types"
 	"cursortab/utils"
@@ -42,10 +43,8 @@ func (e *Engine) acceptCompletion() {
 	e.buffer.CommitPending()
 	e.saveCurrentFileState()
 
-	// Notify provider of acceptance (for usage tracking/billing)
-	if accepter, ok := e.provider.(CompletionAccepter); ok {
-		go accepter.AcceptCompletion(e.mainCtx)
-	}
+	// Send accept metric
+	e.sendMetric(metrics.EventAccepted)
 
 	// 2. Clear completion state (keep prefetch)
 	e.clearState(ClearOptions{})

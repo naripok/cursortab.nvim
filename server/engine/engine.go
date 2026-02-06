@@ -9,6 +9,7 @@ import (
 
 	"cursortab/buffer"
 	"cursortab/logger"
+	"cursortab/metrics"
 	"cursortab/text"
 	"cursortab/types"
 )
@@ -105,6 +106,11 @@ type Engine struct {
 	userActions      []*types.UserAction // Ring buffer of last MaxUserActions actions
 	lastBufferLines  []string            // For detecting text changes
 	lastCursorOffset int                 // For cursor movement detection
+
+	// Metrics tracking (engine owns state, provider implements Sender)
+	metricSender   metrics.Sender
+	currentMetrics metrics.CompletionInfo
+	metricsCh      chan metrics.Event
 }
 
 // NewEngine creates a new Engine instance.
@@ -116,7 +122,7 @@ func NewEngine(provider Provider, buf Buffer, config EngineConfig, clock Clock) 
 	}
 	workspaceID := fmt.Sprintf("%s-%d", workspacePath, os.Getpid())
 
-	return &Engine{
+	e := &Engine{
 		WorkspacePath:          workspacePath,
 		WorkspaceID:            workspaceID,
 		provider:               provider,
@@ -136,7 +142,16 @@ func NewEngine(provider Provider, buf Buffer, config EngineConfig, clock Clock) 
 		prefetchState:          prefetchNone,
 		stopped:                false,
 		fileStateStore:         make(map[string]*FileState),
-	}, nil
+	}
+
+	// Initialize metrics if provider implements Sender
+	if sender, ok := provider.(metrics.Sender); ok {
+		e.metricSender = sender
+		e.metricsCh = make(chan metrics.Event, 64)
+		go e.metricsWorker()
+	}
+
+	return e, nil
 }
 
 // Start begins the engine event loop.
@@ -163,9 +178,6 @@ func (e *Engine) Stop() {
 		logger.Info("stopping engine...")
 
 		e.stopped = true
-		if e.mainCancel != nil {
-			e.mainCancel()
-		}
 		if e.currentCancel != nil {
 			e.currentCancel()
 			e.currentCancel = nil
@@ -186,6 +198,12 @@ func (e *Engine) Stop() {
 		e.prefetchState = prefetchNone
 		e.completionOriginalLines = nil
 		close(e.eventChan)
+		if e.metricsCh != nil {
+			close(e.metricsCh)
+		}
+		if e.mainCancel != nil {
+			e.mainCancel()
+		}
 
 		logger.Info("engine stopped")
 	})
@@ -218,6 +236,10 @@ func (e *Engine) clearState(opts ClearOptions) {
 	}
 	if opts.CallOnReject {
 		e.buffer.ClearUI()
+		// Send reject metric if a completion was shown
+		if len(e.completions) > 0 {
+			e.sendMetric(metrics.EventRejected)
+		}
 	}
 	e.completions = nil
 	e.applyBatch = nil
@@ -435,4 +457,49 @@ func totalChars(lines []string) int {
 		total += len(line) + 1
 	}
 	return total
+}
+
+// Metrics tracking
+
+// recordMetricsShown records that a completion was shown to the user.
+// Called when displaying a completion with metrics info from the provider.
+func (e *Engine) recordMetricsShown(info *types.MetricsInfo) {
+	if info == nil || info.ID == "" {
+		e.currentMetrics = metrics.CompletionInfo{}
+		return
+	}
+	e.currentMetrics = metrics.CompletionInfo{
+		ID:        info.ID,
+		Additions: info.Additions,
+		Deletions: info.Deletions,
+	}
+	e.sendMetric(metrics.EventShown)
+}
+
+// sendMetric queues a metric event for async sending.
+// Clears currentMetrics after sending accept/reject/ignored events.
+func (e *Engine) sendMetric(eventType metrics.EventType) {
+	if e.metricSender == nil || e.currentMetrics.ID == "" {
+		return
+	}
+
+	event := metrics.Event{Type: eventType, Info: e.currentMetrics}
+
+	// Clear metrics after outcome events (not after shown)
+	if eventType != metrics.EventShown {
+		e.currentMetrics = metrics.CompletionInfo{}
+	}
+
+	select {
+	case e.metricsCh <- event:
+	default:
+		logger.Warn("metrics: event queue full, dropping %s event for %s", eventType, event.Info.ID)
+	}
+}
+
+// metricsWorker processes metrics events asynchronously.
+func (e *Engine) metricsWorker() {
+	for event := range e.metricsCh {
+		e.metricSender.SendMetric(e.mainCtx, event)
+	}
 }

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"cursortab/logger"
+	"cursortab/metrics"
 	"cursortab/text"
 	"cursortab/types"
 	"cursortab/utils"
@@ -19,6 +20,8 @@ func (e *Engine) handleCompletionReadyImpl(response *types.CompletionResponse) {
 	completion := response.Completions[0]
 
 	if e.processCompletion(completion) {
+		// Completion was shown - record metrics
+		e.recordMetricsShown(response.MetricsInfo)
 		return
 	}
 
@@ -213,6 +216,9 @@ func (e *Engine) handleCursorTarget() {
 
 // clearCompletionUIOnly clears completion state but preserves prefetch.
 func (e *Engine) clearCompletionUIOnly() {
+	if len(e.completions) > 0 {
+		e.sendMetric(metrics.EventIgnored)
+	}
 	e.clearState(ClearOptions{CancelCurrent: true, CancelPrefetch: false, ClearStaged: true, CallOnReject: false})
 	e.state = stateIdle
 	e.cursorTarget = nil
