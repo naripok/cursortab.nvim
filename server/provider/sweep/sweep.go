@@ -148,7 +148,6 @@ func formatTreesitterSection(req *types.CompletionRequest) string {
 	b.WriteString("<|file_sep|>context/treesitter\n")
 
 	if ts.EnclosingSignature != "" {
-		fmt.Fprintf(&b, "Language: %s\n", ts.Language)
 		fmt.Fprintf(&b, "Enclosing scope: %s\n", ts.EnclosingSignature)
 	}
 

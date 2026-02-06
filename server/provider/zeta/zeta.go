@@ -227,7 +227,6 @@ func formatTreesitterForPrompt(req *types.CompletionRequest) string {
 	var b strings.Builder
 
 	if ts.EnclosingSignature != "" {
-		fmt.Fprintf(&b, "Language: %s\n", ts.Language)
 		fmt.Fprintf(&b, "Enclosing scope: %s\n", ts.EnclosingSignature)
 	}
 

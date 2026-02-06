@@ -500,9 +500,7 @@ func formatTreesitterChunk(ts *types.TreesitterContext) []sweepapi.FileChunk {
 	var sb strings.Builder
 
 	if ts.EnclosingSignature != "" {
-		sb.WriteString("Language: ")
-		sb.WriteString(ts.Language)
-		sb.WriteString("\nEnclosing scope: ")
+		sb.WriteString("Enclosing scope: ")
 		sb.WriteString(ts.EnclosingSignature)
 		sb.WriteString("\n")
 	}

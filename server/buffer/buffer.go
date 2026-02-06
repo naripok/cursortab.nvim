@@ -638,8 +638,6 @@ func (b *NvimBuffer) TreesitterSymbols(row, col int) *types.TreesitterContext {
 		local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
 		if not ok or not parser then return nil end
 
-		local lang = parser:lang()
-
 		-- Scope node types we look for
 		local scope_types = {
 			function_declaration = true, function_definition = true,
@@ -659,7 +657,7 @@ func (b *NvimBuffer) TreesitterSymbols(row, col int) *types.TreesitterContext {
 
 		-- Get node at cursor
 		local cursor_node = vim.treesitter.get_node({bufnr = bufnr, pos = {row, col}})
-		if not cursor_node then return {language = lang} end
+		if not cursor_node then return {} end
 
 		-- Walk up to find enclosing scope
 		local enclosing = nil
@@ -710,7 +708,6 @@ func (b *NvimBuffer) TreesitterSymbols(row, col int) *types.TreesitterContext {
 		end
 
 		return {
-			language = lang,
 			enclosing_signature = enclosing_sig,
 			siblings = siblings,
 			imports = imports,
@@ -727,7 +724,6 @@ func (b *NvimBuffer) TreesitterSymbols(row, col int) *types.TreesitterContext {
 	}
 
 	ctx := &types.TreesitterContext{
-		Language:           getString(result, "language"),
 		EnclosingSignature: getString(result, "enclosing_signature"),
 	}
 

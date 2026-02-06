@@ -81,7 +81,6 @@ type LinterError struct {
 
 // TreesitterContext holds treesitter-derived scope information around the cursor
 type TreesitterContext struct {
-	Language           string
 	EnclosingSignature string
 	Siblings           []*TreesitterSymbol
 	Imports            []string
