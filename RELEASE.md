@@ -26,13 +26,27 @@ Follow semantic versioning.
 - First stable release starts at `v1.0.0`
 - Breaking changes increment MAJOR (marked with `!` in commits)
 
+## Version Location
+
+The version is defined in `server/daemon.go`:
+
+```go
+Version: "0.4.8-beta", // AUTO-UPDATED by release workflow
+```
+
+The release workflow automatically updates this when a tag is pushed.
+
 ## Creating a Release
 
-1. Update version references if any exist in code.
-
-2. Create and push a git tag:
+1. Create and push a git tag:
 
    ```bash
-   git tag -a v0.1.0-beta -m "v0.1.0-beta"
-   git push origin v0.1.0-beta
+   git tag -a v0.5.0-beta -m "v0.5.0-beta"
+   git push origin v0.5.0-beta
    ```
+
+2. The release workflow will:
+   - Run tests
+   - Update the version in `server/daemon.go`
+   - Commit and push the version update to main
+   - Create the GitHub release with auto-generated notes
