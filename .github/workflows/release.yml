@@ -78,7 +78,7 @@ jobs:
       - name: Generate release notes
         id: notes
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${GITHUB_REF_NAME}$" | head -n 1)
           if [ -z "$PREV_TAG" ]; then
             RANGE="HEAD"
           else
@@ -101,7 +101,7 @@ jobs:
             print_section "Breaking Changes" "[a-z]+(\(.+\))?!:"
             print_section "Features" "feat(\(.+\))?:"
             print_section "Bug Fixes" "fix(\(.+\))?:"
-            print_section "Other Changes" "(refactor|docs|perf|chore|test|ci)(\(.+\))?:"
+            print_section "Other Changes" "(refactor|docs|perf|chore|test|ci|revert)(\(.+\))?:"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
