@@ -75,6 +75,10 @@ jobs:
             git push origin main
           fi
 
+          # Move the tag to include the version bump commit
+          git tag -f "${GITHUB_REF_NAME}"
+          git push -f origin "${GITHUB_REF_NAME}"
+
       - name: Generate release notes
         id: notes
         run: |
