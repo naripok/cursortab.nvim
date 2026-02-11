@@ -79,6 +79,18 @@ Full configuration with defaults: >lua
         auto_advance = true,
         proximity_threshold = 2,
       },
+      ignore_paths = {              -- glob patterns for files to skip
+        "*.min.js",
+        "*.min.css",
+        "*.map",
+        "*-lock.json",
+        "*.lock",
+        "*.sum",
+        "*.hmap",
+        "*.pbxproj",
+        "*.log",
+      },
+      ignore_gitignored = true,     -- skip files matched by .gitignore
     },
 
     provider = {
@@ -193,6 +205,34 @@ behavior.cursor_prediction            *cursortab-config-behavior-cursor-predicti
       completions span multiple distant locations, this controls when to show
       a jump indicator instead of applying changes directly. Set to 0 to
       disable (default: 2).
+
+behavior.ignore_paths                  *cursortab-config-behavior-ignore-paths*
+
+  List of gitignore-style glob patterns. Files matching any pattern will not
+  receive completions. If a pattern contains "/", it is matched against the
+  file's path relative to the working directory; otherwise it is matched
+  against the filename only. Supports "*" (any non-"/" characters) and "**"
+  (any characters including "/").
+
+  Default: >lua
+    {
+      "*.min.js",
+      "*.min.css",
+      "*.map",
+      "*-lock.json",
+      "*.lock",
+      "*.sum",
+      "*.hmap",
+      "*.pbxproj",
+      "*.log",
+    }
+<
+
+behavior.ignore_gitignored      *cursortab-config-behavior-ignore-gitignored*
+
+  When true, files matched by the repository's `.gitignore` are skipped for
+  completions. Uses `git check-ignore` and only runs on buffer/window enter.
+  Default: true.
 
 ------------------------------------------------------------------------------
 PROVIDER OPTIONS                                    *cursortab-config-provider*

@@ -238,6 +238,7 @@ end
 
 -- Set up all autocommands and keymaps
 function events.setup()
+	buffer.setup()
 	setup_autocommands()
 	setup_keymaps()
 end

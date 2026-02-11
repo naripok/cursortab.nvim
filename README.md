@@ -111,6 +111,18 @@ require("cursortab").setup({
       auto_advance = true,       -- When no changes, show cursor jump to last line
       proximity_threshold = 2,   -- Min lines apart to show cursor jump (0 to disable)
     },
+    ignore_paths = {             -- Glob patterns for files to skip completions
+      "*.min.js",
+      "*.min.css",
+      "*.map",
+      "*-lock.json",
+      "*.lock",
+      "*.sum",
+      "*.hmap",
+      "*.pbxproj",
+      "*.log",
+    },
+    ignore_gitignored = true,    -- Skip files matched by .gitignore
   },
 
   provider = {

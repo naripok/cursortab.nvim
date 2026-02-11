@@ -1,5 +1,7 @@
 -- Buffer state management for cursortab.nvim
 
+local config = require("cursortab.config")
+
 ---@class BufferModule
 local buffer = {}
 
@@ -14,6 +16,70 @@ local buffer = {}
 
 -- Filetypes to skip (set for O(1) lookup)
 local skip_filetypes = { [""] = true, help = true, qf = true, netrw = true, fugitive = true, NvimTree = true }
+
+-- Convert a gitignore-style glob pattern to a Lua pattern.
+-- If the pattern contains "/", it matches against the full relative path;
+-- otherwise it matches against the filename only.
+---@param path string Absolute file path
+---@param pattern string Gitignore-style glob pattern
+---@return boolean
+local function match_ignore_pattern(path, pattern)
+	-- Determine what to match against
+	local match_target
+	if pattern:find("/", 1, true) then
+		-- Pattern contains "/" — match against relative path from cwd
+		local cwd = vim.fn.getcwd() .. "/"
+		if path:sub(1, #cwd) == cwd then
+			match_target = path:sub(#cwd + 1)
+		else
+			match_target = path
+		end
+	else
+		-- No "/" in pattern — match against filename only
+		match_target = vim.fn.fnamemodify(path, ":t")
+	end
+
+	-- Convert glob to Lua pattern:
+	-- First handle "**" (any chars including /), then "*" (any non-/ chars)
+	local lua_pattern = pattern:gsub("([%.%+%-%%%[%]%^%$%(%)%?])", "%%%1") -- escape special chars (except *)
+	lua_pattern = lua_pattern:gsub("%*%*", "\0") -- placeholder for **
+	lua_pattern = lua_pattern:gsub("%*", "[^/]*") -- * -> any non-/ chars
+	lua_pattern = lua_pattern:gsub("%z", ".*") -- ** -> any chars
+	lua_pattern = "^" .. lua_pattern .. "$"
+
+	return match_target:match(lua_pattern) ~= nil
+end
+
+-- Check if a file path matches any ignore pattern.
+---@param path string Absolute file path
+---@param patterns string[] Glob patterns
+---@return boolean
+local function matches_ignore_paths(path, patterns)
+	for _, pattern in ipairs(patterns) do
+		if match_ignore_pattern(path, pattern) then
+			return true
+		end
+	end
+	return false
+end
+
+-- Cache for gitignore check results (path -> boolean)
+---@type table<string, boolean>
+local gitignore_cache = {}
+
+-- Check if a file is ignored by git (cached).
+---@param path string Absolute file path
+---@return boolean
+local function is_gitignored(path)
+	local cached = gitignore_cache[path]
+	if cached ~= nil then
+		return cached
+	end
+	vim.fn.system({ "git", "check-ignore", "--quiet", path })
+	local ignored = vim.v.shell_error == 0
+	gitignore_cache[path] = ignored
+	return ignored
+end
 
 -- Global buffer state cache to avoid expensive API calls on every cursor movement
 ---@type BufferState
@@ -60,10 +126,24 @@ local function update_buffer_state()
 
 	-- Combined check: should we skip idle completions for this buffer?
 	local should_skip_filetype = skip_filetypes[buffer_state.filetype] or false
+	local should_skip_path = false
+
+	local cfg = config.get()
+	local buf_path = vim.api.nvim_buf_get_name(current_buf)
+	if buf_path ~= "" then
+		if #cfg.behavior.ignore_paths > 0 then
+			should_skip_path = matches_ignore_paths(buf_path, cfg.behavior.ignore_paths)
+		end
+		if not should_skip_path and cfg.behavior.ignore_gitignored then
+			should_skip_path = is_gitignored(buf_path)
+		end
+	end
+
 	buffer_state.should_skip = buffer_state.is_floating_window
 		or not buffer_state.is_modifiable
 		or buffer_state.is_readonly
 		or should_skip_filetype
+		or should_skip_path
 end
 
 -- Public API
@@ -77,6 +157,20 @@ end
 ---@return boolean
 function buffer.should_skip()
 	return buffer_state.should_skip
+end
+
+-- Set up autocmds for cache invalidation
+function buffer.setup()
+	vim.api.nvim_create_autocmd("BufWritePost", {
+		group = vim.api.nvim_create_augroup("cursortab_gitignore_cache", { clear = true }),
+		pattern = { ".gitignore", ".git/info/exclude" },
+		callback = function()
+			gitignore_cache = {}
+			-- Force re-evaluation on next buffer enter
+			buffer_state.current_buf = nil
+			buffer_state.current_win = nil
+		end,
+	})
 end
 
 return buffer

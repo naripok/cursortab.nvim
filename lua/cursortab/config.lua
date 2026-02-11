@@ -27,6 +27,8 @@
 ---@field text_change_debounce integer
 ---@field max_visible_lines integer Max visible lines per completion (0 to disable)
 ---@field cursor_prediction CursortabCursorPredictionConfig
+---@field ignore_paths string[] Glob patterns for files to skip (gitignore-style)
+---@field ignore_gitignored boolean Skip files matched by .gitignore
 
 ---@class CursortabFIMTokensConfig
 ---@field prefix string FIM prefix token (e.g., "<|fim_prefix|>")
@@ -108,6 +110,18 @@ local default_config = {
 			auto_advance = true, -- When completion has no changes, show cursor jump to last line
 			proximity_threshold = 2, -- Min lines apart to show cursor jump between completions (0 to disable)
 		},
+		ignore_paths = { -- Glob patterns for files to skip completions
+			"*.min.js",
+			"*.min.css",
+			"*.map",
+			"*-lock.json",
+			"*.lock",
+			"*.sum",
+			"*.hmap",
+			"*.pbxproj",
+			"*.log",
+		},
+		ignore_gitignored = true, -- Skip files matched by .gitignore
 	},
 
 	provider = {
@@ -312,6 +326,19 @@ local function validate_config(cfg)
 		end
 		if cfg.behavior.max_visible_lines and cfg.behavior.max_visible_lines < 0 then
 			error("[cursortab.nvim] behavior.max_visible_lines must be >= 0 (0 to disable)")
+		end
+		if cfg.behavior.ignore_paths ~= nil then
+			if type(cfg.behavior.ignore_paths) ~= "table" then
+				error("[cursortab.nvim] behavior.ignore_paths must be a list of glob pattern strings")
+			end
+			for i, pattern in ipairs(cfg.behavior.ignore_paths) do
+				if type(pattern) ~= "string" then
+					error(string.format("[cursortab.nvim] behavior.ignore_paths[%d] must be a string", i))
+				end
+			end
+		end
+		if cfg.behavior.ignore_gitignored ~= nil and type(cfg.behavior.ignore_gitignored) ~= "boolean" then
+			error("[cursortab.nvim] behavior.ignore_gitignored must be a boolean")
 		end
 	end
 
