@@ -28,6 +28,10 @@ function M.check()
 	vim.health.info("api_key_env: " .. (cfg.provider.api_key_env ~= "" and cfg.provider.api_key_env or "-"))
 	vim.health.info("timeout: " .. cfg.provider.completion_timeout .. "ms")
 	vim.health.info("max_tokens: " .. cfg.provider.max_tokens)
+	vim.health.info("temperature: " .. cfg.provider.temperature)
+	vim.health.info("top_k: " .. cfg.provider.top_k)
+	vim.health.info("max_diff_history_tokens: " .. cfg.provider.max_diff_history_tokens)
+	vim.health.info("completion_path: " .. cfg.provider.completion_path)
 	vim.health.info("privacy_mode: " .. (cfg.provider.privacy_mode and "yes" or "no"))
 
 	if cfg.provider.api_key_env ~= "" then
@@ -50,6 +54,9 @@ function M.check()
 	vim.health.info("cursor_prediction: " .. (cfg.behavior.cursor_prediction.enabled and "yes" or "no"))
 	vim.health.info("auto_advance: " .. (cfg.behavior.cursor_prediction.auto_advance and "yes" or "no"))
 	vim.health.info("proximity_threshold: " .. cfg.behavior.cursor_prediction.proximity_threshold)
+	vim.health.info("enabled_modes: " .. table.concat(cfg.behavior.enabled_modes, ", "))
+	vim.health.info("ignore_paths: " .. #cfg.behavior.ignore_paths .. " patterns")
+	vim.health.info("ignore_gitignored: " .. (cfg.behavior.ignore_gitignored and "yes" or "no"))
 
 	-- Keymaps
 	vim.health.start("Keymaps")
