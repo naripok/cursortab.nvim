@@ -317,6 +317,8 @@ func (p *Provider) PrepareLineStream(ctx context.Context, req *types.CompletionR
 		RetrievalChunks:      retrievalChunks,
 	}
 
+	p.logRequest(apiReq)
+
 	stream := p.client.DoCompletionStream(ctx, apiReq, fileContents)
 
 	sctx := &streamContext{
@@ -340,7 +342,8 @@ func (p *Provider) FinishLineStream(providerCtx any, text string, finishReason s
 		return &types.CompletionResponse{}, nil
 	}
 
-	logger.Debug("sweepapi: stream finished, %d chars, reason=%s", len(text), finishReason)
+	logger.Debug("sweepapi: stream finished, %d chars, reason=%s, stoppedEarly=%v\n  Text:\n%s",
+		len(text), finishReason, stoppedEarly, text)
 
 	autocompleteID := ""
 	if sctx.stream != nil {
@@ -411,7 +414,8 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		RetrievalChunks:      retrievalChunks,
 	}
 
-	// Call API (returns ndjson: one response per line)
+	p.logRequest(apiReq)
+
 	responses, err := p.client.DoCompletion(ctx, apiReq)
 	if err != nil {
 		return nil, err
@@ -425,10 +429,12 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		}
 	}
 	if len(edits) == 0 {
+		logger.Debug("sweepapi response: no edits")
 		return &types.CompletionResponse{}, nil
 	}
 
-	// Use the autocomplete ID from the first edit for metrics
+	p.logResponse(edits)
+
 	autocompleteID := edits[0].AutocompleteID
 
 	// Apply all byte-range edits to produce unified new text
@@ -479,6 +485,29 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 			Deletions: deletions,
 		},
 	}, nil
+}
+
+func (p *Provider) logRequest(req *sweepapi.AutocompleteRequest) {
+	logger.Debug("sweepapi request:\n  URL: %s\n  RepoName: %s\n  FilePath: %s\n  CursorPosition: %d\n  FileContents length: %d chars\n  RecentChanges length: %d chars\n  FileChunks: %d\n  RetrievalChunks: %d\n  UserActions: %d\n  FileContents:\n%s",
+		p.client.URL,
+		req.RepoName,
+		req.FilePath,
+		req.CursorPosition,
+		len(req.FileContents),
+		len(req.RecentChanges),
+		len(req.FileChunks),
+		len(req.RetrievalChunks),
+		len(req.RecentUserActions),
+		req.FileContents)
+}
+
+func (p *Provider) logResponse(edits []*sweepapi.AutocompleteResponse) {
+	var sb strings.Builder
+	for i, edit := range edits {
+		fmt.Fprintf(&sb, "  Edit %d: startIndex=%d endIndex=%d completionLen=%d\n    Completion:\n%s\n",
+			i, edit.StartIndex, edit.EndIndex, len(edit.Completion), edit.Completion)
+	}
+	logger.Debug("sweepapi response: %d edits\n%s", len(edits), sb.String())
 }
 
 // countChanges calculates additions and deletions based on line counts.

@@ -163,9 +163,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	}
 	p.mu.Unlock()
 
-	// Send NES request
-	logger.Debug("copilot: sending NES request reqID=%d uri=%s version=%d row=%d col=%d",
-		reqID, uri, req.Version, req.CursorRow, req.CursorCol)
+	p.logRequest(reqID, uri, req.Version, req.CursorRow, req.CursorCol)
 	if err := p.buffer.SendCopilotNESRequest(reqID, uri, req.Version, req.CursorRow, req.CursorCol); err != nil {
 		logger.Error("failed to send NES request: %v", err)
 		return p.emptyResponse(), nil
@@ -182,7 +180,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 			return p.emptyResponse(), nil
 		}
 
-		logger.Debug("copilot: received %d edits", len(result.Edits))
+		p.logResponse(result.Edits)
 		return p.convertEdits(result.Edits, req)
 	}
 }
@@ -254,6 +252,25 @@ func (p *Provider) ensureHandlerRegistered(clientID int) error {
 	p.handlerRegistered = true
 	p.lastClientID = clientID
 	return nil
+}
+
+func (p *Provider) logRequest(reqID int64, uri string, version, cursorRow, cursorCol int) {
+	logger.Debug("copilot request:\n  ReqID: %d\n  URI: %s\n  Version: %d\n  CursorRow: %d\n  CursorCol: %d",
+		reqID, uri, version, cursorRow, cursorCol)
+}
+
+func (p *Provider) logResponse(edits []CopilotEdit) {
+	var sb strings.Builder
+	for i, edit := range edits {
+		fmt.Fprintf(&sb, "  Edit %d: range=[%d:%d-%d:%d] version=%d textLen=%d\n    Text:\n%s\n",
+			i,
+			edit.Range.Start.Line, edit.Range.Start.Character,
+			edit.Range.End.Line, edit.Range.End.Character,
+			edit.TextDoc.Version,
+			len(edit.Text),
+			edit.Text)
+	}
+	logger.Debug("copilot response: %d edits\n%s", len(edits), sb.String())
 }
 
 // convertEdits transforms Copilot LSP edits to cursortab's CompletionResponse format.

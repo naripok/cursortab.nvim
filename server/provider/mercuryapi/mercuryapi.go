@@ -104,9 +104,6 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		req.RecentBufferSnapshots,
 	)
 
-	logger.Debug("mercuryapi: prompt length=%d, editable=[%d:%d], context=[%d:%d]",
-		len(prompt), editableStart, editableEnd, contextStart, contextEnd)
-
 	// Build API request
 	apiReq := &mercuryapi.Request{
 		Model: mercuryapi.Model,
@@ -116,29 +113,27 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 		Stream: false,
 	}
 
-	// Call API
+	p.logRequest(apiReq, editableStart, editableEnd, contextStart, contextEnd)
+
 	apiResp, err := p.client.DoCompletion(ctx, apiReq)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract completion text
 	completionText := mercuryapi.ExtractCompletion(apiResp)
+
+	p.logResponse(apiResp, completionText)
+
 	if completionText == "" {
 		return &types.CompletionResponse{}, nil
 	}
 
-	// The completion text replaces the editable region
 	newLines := strings.Split(completionText, "\n")
 
-	// Check if it's a no-op (same content)
 	originalEditable := req.Lines[editableStart-1 : editableEnd]
 	if slices.Equal(newLines, originalEditable) {
 		return &types.CompletionResponse{}, nil
 	}
-
-	logger.Debug("mercuryapi: completion replaces lines [%d:%d] with %d lines",
-		editableStart, editableEnd, len(newLines))
 
 	// Calculate metrics info for the engine
 	additions, deletions := countChanges(editableEnd-editableStart+1, len(newLines))
@@ -155,6 +150,32 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 			Deletions: deletions,
 		},
 	}, nil
+}
+
+func (p *Provider) logRequest(req *mercuryapi.Request, editableStart, editableEnd, contextStart, contextEnd int) {
+	prompt := ""
+	if len(req.Messages) > 0 {
+		prompt = req.Messages[0].Content
+	}
+	logger.Debug("mercuryapi request:\n  URL: %s\n  Model: %s\n  Editable: [%d:%d]\n  Context: [%d:%d]\n  Prompt length: %d chars\n  Prompt:\n%s",
+		p.client.URL,
+		req.Model,
+		editableStart, editableEnd,
+		contextStart, contextEnd,
+		len(prompt),
+		prompt)
+}
+
+func (p *Provider) logResponse(resp *mercuryapi.Response, completionText string) {
+	finishReason := ""
+	if len(resp.Choices) > 0 {
+		finishReason = resp.Choices[0].FinishReason
+	}
+	logger.Debug("mercuryapi response:\n  ID: %s\n  FinishReason: %s\n  Text length: %d chars\n  Text:\n%s",
+		resp.ID,
+		finishReason,
+		len(completionText),
+		completionText)
 }
 
 // countChanges calculates additions and deletions based on line counts.
