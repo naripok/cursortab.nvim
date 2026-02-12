@@ -74,6 +74,7 @@ Full configuration with defaults: >lua
       idle_completion_delay = 50,   -- ms, -1 to disable
       text_change_debounce = 50,    -- ms, -1 to disable
       max_visible_lines = 12,       -- max visible lines per completion, 0 to disable
+      enabled_modes = { "insert", "normal" },  -- modes where completions are active
       cursor_prediction = {
         enabled = true,
         auto_advance = true,
@@ -190,6 +191,18 @@ BEHAVIOR OPTIONS                                    *cursortab-config-behavior*
       completions will be split into stages if they exceed this line limit, in
       addition to the existing proximity threshold and viewport constraints.
       Set to 0 to disable (default: 0).
+
+  `enabled_modes`
+      List of modes where completions are active. Valid values: "insert",
+      "normal". When a mode is not listed, no completions are triggered or
+      shown in that mode, and switching to it cancels any in-flight
+      completion. Manual triggers via `keymaps.trigger` still work.
+      Default: { "insert", "normal" }.
+      Examples: >lua
+        enabled_modes = { "insert" }          -- insert-only
+        enabled_modes = { "normal" }          -- normal-only
+        enabled_modes = {}                    -- manual-only
+<
 
 behavior.cursor_prediction            *cursortab-config-behavior-cursor-prediction*
 

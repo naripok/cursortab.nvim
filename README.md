@@ -106,6 +106,7 @@ require("cursortab").setup({
     idle_completion_delay = 50,  -- Delay in ms after idle to trigger completion (-1 to disable)
     text_change_debounce = 50,   -- Debounce in ms after text change to trigger completion (-1 to disable)
     max_visible_lines = 12,      -- Max visible lines per completion (0 to disable)
+    enabled_modes = { "insert", "normal" },  -- Modes where completions are active
     cursor_prediction = {
       enabled = true,            -- Show jump indicators after completions
       auto_advance = true,       -- When no changes, show cursor jump to last line

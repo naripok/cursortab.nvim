@@ -8,6 +8,19 @@ local ui = require("cursortab.ui")
 ---@class EventsModule
 local events = {}
 
+-- Check if a mode is enabled in the config
+---@param mode string "insert" or "normal"
+---@return boolean
+local function is_mode_enabled(mode)
+	local modes = config.get().behavior.enabled_modes
+	for _, m in ipairs(modes) do
+		if m == mode then
+			return true
+		end
+	end
+	return false
+end
+
 -- Track if autocommands have been set up to prevent duplicate registrations
 local autocommands_setup_done = false
 
@@ -121,7 +134,7 @@ local function setup_autocommands()
 
 	-- Text change events
 	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-		callback = function()
+		callback = function(args)
 			-- Skip if buffer should be ignored
 			if buffer.should_skip() then
 				return
@@ -156,39 +169,59 @@ local function setup_autocommands()
 				end
 			end
 
+			if args.event == "TextChangedI" and not is_mode_enabled("insert") then
+				return
+			end
+			if args.event == "TextChanged" and not is_mode_enabled("normal") then
+				return
+			end
+
 			daemon.send_event("text_changed")
 		end,
 	})
 
-	-- Shared cursor movement handler
+	-- Shared cursor movement handler (UI only, does not send event)
+	---@return boolean suppressed true if the event was suppressed (skip sending)
 	local function handle_cursor_moved(is_insert)
 		if is_insert and text_changed_this_tick then
-			return
+			return true
 		end
 		if skip_next_cursor_moved then
 			skip_next_cursor_moved = false
-			return
+			return true
 		end
 		if awaiting_completion_after_jump then
-			return
+			return true
 		end
 		if ui.has_cursor_prediction() or ui.has_completion() then
 			ui.ensure_close_all()
 		end
-		daemon.send_event("cursor_moved")
+		return false
 	end
 
 	-- Cursor movement events (normal mode)
 	vim.api.nvim_create_autocmd({ "CursorMoved" }, {
 		callback = function()
-			handle_cursor_moved(false)
+			if handle_cursor_moved(false) then
+				return
+			end
+			if not is_mode_enabled("normal") then
+				return
+			end
+			daemon.send_event("cursor_moved")
 		end,
 	})
 
 	-- Cursor movement events (insert mode - e.g., arrow keys)
 	vim.api.nvim_create_autocmd({ "CursorMovedI" }, {
 		callback = function()
-			handle_cursor_moved(true)
+			if handle_cursor_moved(true) then
+				return
+			end
+			if not is_mode_enabled("insert") then
+				return
+			end
+			daemon.send_event("cursor_moved")
 		end,
 	})
 

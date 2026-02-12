@@ -94,6 +94,10 @@ type Engine struct {
 	// Context gatherer for additional completion context
 	contextGatherer *ctx.Gatherer
 
+	// Mode tracking
+	inInsertMode      bool
+	manuallyTriggered bool
+
 	// Config options
 	config        EngineConfig
 	contextLimits ContextLimits
@@ -249,6 +253,7 @@ func (e *Engine) clearState(opts ClearOptions) {
 	}
 	e.completionOriginalLines = nil
 	e.currentGroups = nil
+	e.manuallyTriggered = false
 }
 
 // clearAll clears everything including prefetch and staged completions
@@ -294,6 +299,9 @@ func (e *Engine) startIdleTimer() {
 	if e.config.IdleCompletionDelay < 0 {
 		return
 	}
+	if !e.isModeEnabled() {
+		return
+	}
 	e.stopIdleTimer()
 	e.idleTimer = e.clock.AfterFunc(e.config.IdleCompletionDelay, func() {
 		e.mu.RLock()
@@ -329,6 +337,9 @@ func (e *Engine) startTextChangeTimer() {
 	if e.config.TextChangeDebounce < 0 {
 		return
 	}
+	if !e.isModeEnabled() {
+		return
+	}
 	e.stopTextChangeTimer()
 	e.textChangeTimer = e.clock.AfterFunc(e.config.TextChangeDebounce, func() {
 		e.mu.RLock()
@@ -352,6 +363,18 @@ func (e *Engine) stopTextChangeTimer() {
 		e.textChangeTimer.Stop()
 		e.textChangeTimer = nil
 	}
+}
+
+// isModeEnabled returns true if completions are enabled for the current mode
+// or if the completion was manually triggered.
+func (e *Engine) isModeEnabled() bool {
+	if e.manuallyTriggered {
+		return true
+	}
+	if e.inInsertMode {
+		return e.config.CompleteInInsert
+	}
+	return e.config.CompleteInNormal
 }
 
 // recordUserAction adds an action to the ring buffer, evicting oldest if full

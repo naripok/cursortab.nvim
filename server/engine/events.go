@@ -17,7 +17,8 @@ type EventType string
 const (
 	EventEsc               EventType = "esc"
 	EventTextChanged       EventType = "text_changed"
-	EventTextChangeTimeout EventType = "trigger_completion"
+	EventTextChangeTimeout EventType = "text_change_timeout"
+	EventTrigger           EventType = "trigger_completion"
 	EventCursorMoved       EventType = "cursor_moved"
 	EventInsertEnter       EventType = "insert_enter"
 	EventInsertLeave       EventType = "insert_leave"
@@ -61,6 +62,7 @@ func buildEventTypeMap() map[string]EventType {
 		EventEsc,
 		EventTextChanged,
 		EventTextChangeTimeout,
+		EventTrigger,
 		EventCursorMoved,
 		EventInsertEnter,
 		EventInsertLeave,
@@ -128,6 +130,7 @@ type Transition struct {
 var transitions = []Transition{
 	// From stateIdle
 	{stateIdle, EventTextChangeTimeout, (*Engine).doRequestCompletion},
+	{stateIdle, EventTrigger, (*Engine).doManualTrigger},
 	{stateIdle, EventIdleTimeout, (*Engine).doRequestIdleCompletion},
 	{stateIdle, EventCursorMoved, (*Engine).doResetIdleTimer},
 	{stateIdle, EventInsertEnter, (*Engine).doStopIdleTimer},
@@ -198,6 +201,7 @@ func (e *Engine) dispatch(event Event) bool {
 
 	// Post-dispatch hook: InsertLeave always commits uncommitted user edits
 	if event.Type == EventInsertLeave {
+		e.stopTextChangeTimer()
 		e.syncBuffer()
 		if e.buffer.CommitUserEdits() {
 			e.saveCurrentFileState()
@@ -314,6 +318,14 @@ func (e *Engine) handleEvent(event Event) {
 		logger.Debug("after event: %v (state=%s)", event.Type, e.state)
 	}()
 
+	// Track insert/normal mode (always, regardless of state)
+	switch event.Type {
+	case EventInsertEnter:
+		e.inInsertMode = true
+	case EventInsertLeave:
+		e.inInsertMode = false
+	}
+
 	// Layer 1: Background/async results
 	if e.handleBackgroundEvent(event) {
 		return
@@ -321,6 +333,14 @@ func (e *Engine) handleEvent(event Event) {
 
 	// Layer 2: Dispatch table for user/timer events
 	e.dispatch(event)
+
+	// Cancel completions when entering a disabled mode
+	// (handles transitions not in the table, e.g. InsertEnter from PendingCompletion)
+	if !e.isModeEnabled() && e.state != stateIdle {
+		e.cancelStreaming()
+		e.clearAll()
+		e.state = stateIdle
+	}
 }
 
 // handleBackgroundEvent handles async completion and prefetch results.
@@ -328,6 +348,11 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 	switch event.Type {
 	case EventCompletionReady:
 		if e.state != statePendingCompletion {
+			return true
+		}
+		if !e.isModeEnabled() {
+			e.clearAll()
+			e.state = stateIdle
 			return true
 		}
 		e.handleCompletionReadyImpl(event.Data.(*types.CompletionResponse))
@@ -367,6 +392,11 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 // Action functions for state transitions
 
 func (e *Engine) doRequestCompletion(event Event) {
+	e.requestCompletion(types.CompletionSourceTyping)
+}
+
+func (e *Engine) doManualTrigger(event Event) {
+	e.manuallyTriggered = true
 	e.requestCompletion(types.CompletionSourceTyping)
 }
 

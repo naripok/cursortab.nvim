@@ -26,6 +26,8 @@ type BehaviorConfig struct {
 	TextChangeDebounce  int                    `json:"text_change_debounce"`  // in milliseconds
 	MaxVisibleLines     int                    `json:"max_visible_lines"`     // max visible lines per completion (0 to disable)
 	CursorPrediction    CursorPredictionConfig `json:"cursor_prediction"`
+	CompleteInInsert    bool                   `json:"complete_in_insert"`
+	CompleteInNormal    bool                   `json:"complete_in_normal"`
 }
 
 // FIMTokensConfig holds FIM token settings

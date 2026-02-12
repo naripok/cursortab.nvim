@@ -29,6 +29,7 @@
 ---@field cursor_prediction CursortabCursorPredictionConfig
 ---@field ignore_paths string[] Glob patterns for files to skip (gitignore-style)
 ---@field ignore_gitignored boolean Skip files matched by .gitignore
+---@field enabled_modes string[] Modes where completions are active ("insert", "normal")
 
 ---@class CursortabFIMTokensConfig
 ---@field prefix string FIM prefix token (e.g., "<|fim_prefix|>")
@@ -110,6 +111,7 @@ local default_config = {
 			auto_advance = true, -- When completion has no changes, show cursor jump to last line
 			proximity_threshold = 2, -- Min lines apart to show cursor jump between completions (0 to disable)
 		},
+		enabled_modes = { "insert", "normal" }, -- Modes where completions are active
 		ignore_paths = { -- Glob patterns for files to skip completions
 			"*.min.js",
 			"*.min.css",
@@ -326,6 +328,21 @@ local function validate_config(cfg)
 		end
 		if cfg.behavior.max_visible_lines and cfg.behavior.max_visible_lines < 0 then
 			error("[cursortab.nvim] behavior.max_visible_lines must be >= 0 (0 to disable)")
+		end
+		if cfg.behavior.enabled_modes ~= nil then
+			if type(cfg.behavior.enabled_modes) ~= "table" then
+				error("[cursortab.nvim] behavior.enabled_modes must be a list (e.g., { \"insert\", \"normal\" })")
+			end
+			local valid_modes = { insert = true, normal = true }
+			for i, mode in ipairs(cfg.behavior.enabled_modes) do
+				if type(mode) ~= "string" or not valid_modes[mode] then
+					error(string.format(
+						"[cursortab.nvim] behavior.enabled_modes[%d] = %q is invalid. Must be \"insert\" or \"normal\"",
+						i,
+						tostring(mode)
+					))
+				end
+			end
 		end
 		if cfg.behavior.ignore_paths ~= nil then
 			if type(cfg.behavior.ignore_paths) ~= "table" then

@@ -255,6 +255,8 @@ type EngineConfig struct {
 	IdleCompletionDelay time.Duration
 	TextChangeDebounce  time.Duration
 	CursorPrediction    CursorPredictionConfig
-	MaxDiffTokens       int // Maximum tokens for diff history per file (0 = no limit)
-	MaxVisibleLines     int // Maximum lines per stage (0 = no limit)
+	MaxDiffTokens       int  // Maximum tokens for diff history per file (0 = no limit)
+	MaxVisibleLines     int  // Maximum lines per stage (0 = no limit)
+	CompleteInInsert    bool // Show completions in insert mode
+	CompleteInNormal    bool // Show completions in normal mode
 }
